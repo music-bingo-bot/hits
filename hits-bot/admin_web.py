@@ -10,7 +10,7 @@ import aiofiles
 
 from db import (
     get_all_tracks, get_track_by_id,
-    create_track, update_track, delete_track,          # алиасы из db.py
+    create_track, update_track, delete_track,
     update_track_file,
     create_admin_token, consume_admin_token,
     broadcasts_all, broadcast_create, broadcast_add_media,
@@ -25,7 +25,6 @@ def create_app(bot):
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret"))
 
-    # раздача статики uploads/*
     os.makedirs("uploads", exist_ok=True)
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -48,12 +47,10 @@ def create_app(bot):
     @app.post("/admin_web/login", response_class=HTMLResponse)
     async def login_post(request: Request, password: str = Form("")):
         ok = False
-        # 1) одноразовый токен ?key=...
         token = request.query_params.get("key")
         if token:
             user_id = await consume_admin_token(token)
             ok = user_id is not None
-        # 2) обычный пароль (SESSION_SECRET)
         if not ok and password and password == os.getenv("SESSION_SECRET", ""):
             ok = True
 
@@ -87,11 +84,8 @@ def create_app(bot):
         if guard:
             return guard
 
-        # следующий порядковый номер
         items = await get_all_tracks()
         seq = len(items) + 1
-
-        # имя MP3 — с ДЛИННЫМ тире
         seq_name = f"Музыкальное бинго — {seq:02d}.mp3"
 
         audio_path = None
@@ -111,7 +105,6 @@ def create_app(bot):
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
 
-        # порядок (title, hint_image_path, audio_path_or_file_id)
         await create_track(title or f"Хит #{seq:02d}", hint_path or "", audio_path or "")
         return RedirectResponse("/admin_web", status_code=302)
 
@@ -135,13 +128,11 @@ def create_app(bot):
         if guard:
             return guard
 
-        # текущая запись (для сохранения прежних путей при частичном обновлении)
         current = await get_track_by_id(track_id)  # (id, film_title, hint, file_id)
         cur_title = current[1] if current else ""
         cur_hint = current[2] if current else ""
         cur_file = current[3] if current else ""
 
-        # заменить картинку-подсказку
         hint_path = None
         if hint and hint.filename:
             os.makedirs("uploads/hints", exist_ok=True)
@@ -151,7 +142,6 @@ def create_app(bot):
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
 
-        # заменить аудио (фиксированное имя по номеру)
         audio_path = None
         if audio and audio.filename:
             os.makedirs("uploads/audio", exist_ok=True)
@@ -160,7 +150,6 @@ def create_app(bot):
                 while chunk := await audio.read(64 * 1024):
                     await f.write(chunk)
 
-        # обновляем поля
         await update_track(
             track_id,
             (title or cur_title),
@@ -200,9 +189,9 @@ def create_app(bot):
         request: Request,
         title: str = Form(""),
         text: str = Form(""),
-        images: Optional[List[UploadFile]] = File(default=None),
-        videos: Optional[List[UploadFile]] = File(default=None),
-        files:  Optional[List[UploadFile]] = File(default=None),
+        images: List[UploadFile] = File(default=[]),
+        videos: List[UploadFile] = File(default=[]),
+        files:  List[UploadFile] = File(default=[]),
     ):
         guard = _need_auth(request)
         if guard:
@@ -211,8 +200,8 @@ def create_app(bot):
         bid = await broadcast_create(title, text)
         os.makedirs("uploads/broadcasts", exist_ok=True)
 
-        async def _save_many(lst: Optional[List[UploadFile]], kind: str):
-            for up in (lst or []):
+        async def _save_many(lst: List[UploadFile], kind: str):
+            for up in lst:
                 if not up.filename:
                     continue
                 name = os.path.basename(up.filename).replace("\x00", "")
