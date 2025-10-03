@@ -1,27 +1,44 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <title>Вход — Админка</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: system-ui, Arial; padding: 24px; max-width: 500px; margin: 0 auto; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 20px; }
-    input, button { font-size: 16px; padding: 10px 14px; }
-    input { width: 100%; margin: 8px 0 16px; }
-    button { background: black; color: white; border: 0; border-radius: 8px; cursor: pointer; }
-    .error { color: #b00020; margin: 8px 0 0; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Музыкальное бинго - Админ</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="password"], input[type="text"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #4CAF50; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; }
+        button:hover { background-color: #45a049; }
+        .error { color: red; margin-top: 10px; }
+        .info { color: #666; margin-top: 10px; font-size: 14px; }
+    </style>
 </head>
 <body>
-  <h1>Вход в админку</h1>
-  <div class="card">
-    <form action="/admin_web/login" method="post">
-      <label>Пароль</label>
-      <input type="password" name="password" placeholder="SESSION_SECRET" required>
-      <button type="submit">Войти</button>
-      {% if error %}<div class="error">{{ error }}</div>{% endif %}
-    </form>
-  </div>
+    <h1>🎵 Музыкальное бинго - Админ</h1>
+    
+    {% if mode == "key" %}
+        <p class="info">Войдите через Telegram командой <code>/admin_link</code> для получения одноразовой ссылки, или используйте пароль администратора:</p>
+        <form method="post" action="/admin_web/login">
+            <div class="form-group">
+                <label for="password">Пароль администратора:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit">Войти</button>
+        </form>
+    {% else %}
+        <form method="post" action="/admin_web/login">
+            <div class="form-group">
+                <label for="password">Пароль:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit">Войти</button>
+        </form>
+    {% endif %}
+    
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
 </body>
 </html>
