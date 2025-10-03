@@ -10,12 +10,12 @@ import aiofiles
 
 from db import (
     get_all_tracks, get_track_by_id,
-    create_track, update_track, delete_track,
+    create_track, update_track, delete_track,    # алиасы совместимости
     update_track_file,
     create_admin_token, consume_admin_token,
     broadcasts_all, broadcast_create, broadcast_add_media,
     broadcast_media, broadcast_delete, broadcast_mark_sent,
-    get_all_user_ids,
+    get_all_user_ids
 )
 
 TEMPLATES = Jinja2Templates(directory="templates")
@@ -25,6 +25,7 @@ def create_app(bot):
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret"))
 
+    # раздаём загруженные файлы
     os.makedirs("uploads", exist_ok=True)
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -68,8 +69,7 @@ def create_app(bot):
     @app.get("/admin_web", response_class=HTMLResponse)
     async def tracks_page(request: Request):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         items = await get_all_tracks()
         return TEMPLATES.TemplateResponse("tracks.html", {"request": request, "items": items})
 
@@ -77,12 +77,11 @@ def create_app(bot):
     async def upload_track(
         request: Request,
         title: str = Form(""),
-        audio: Optional[UploadFile] = File(default=None),
-        hint: Optional[UploadFile] = File(default=None),
+        audio: Optional[UploadFile] = File(None),
+        hint:  Optional[UploadFile] = File(None),
     ):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
 
         items = await get_all_tracks()
         seq = len(items) + 1
@@ -111,28 +110,21 @@ def create_app(bot):
     @app.get("/admin_web/edit/{track_id}", response_class=HTMLResponse)
     async def edit_track_page(request: Request, track_id: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         row = await get_track_by_id(track_id)
         return TEMPLATES.TemplateResponse("edit_track.html", {"request": request, "row": row})
 
     @app.post("/admin_web/edit/{track_id}")
     async def edit_track_post(
-        request: Request,
-        track_id: int,
+        request: Request, track_id: int,
         title: str = Form(""),
-        audio: Optional[UploadFile] = File(default=None),
-        hint: Optional[UploadFile] = File(default=None),
+        audio: Optional[UploadFile] = File(None),
+        hint:  Optional[UploadFile] = File(None),
     ):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
 
-        current = await get_track_by_id(track_id)  # (id, film_title, hint, file_id)
-        cur_title = current[1] if current else ""
-        cur_hint = current[2] if current else ""
-        cur_file = current[3] if current else ""
-
+        # заменить картинку-подсказку
         hint_path = None
         if hint and hint.filename:
             os.makedirs("uploads/hints", exist_ok=True)
@@ -142,6 +134,7 @@ def create_app(bot):
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
 
+        # заменить аудио
         audio_path = None
         if audio and audio.filename:
             os.makedirs("uploads/audio", exist_ok=True)
@@ -150,21 +143,21 @@ def create_app(bot):
                 while chunk := await audio.read(64 * 1024):
                     await f.write(chunk)
 
-        await update_track(
-            track_id,
-            (title or cur_title),
-            (hint_path if hint_path is not None else cur_hint),
-        )
-        if audio_path is not None or not cur_file:
-            await update_track_file(track_id, audio_path or cur_file)
+        # обновления
+        if title or hint_path is not None:
+            # если подсказку не меняли — оставим старую
+            old = await get_track_by_id(track_id)
+            old_hint = old[2] if old else ""
+            await update_track(track_id, title or (old[1] if old else ""), hint_path if hint_path is not None else old_hint)
+        if audio_path is not None:
+            await update_track_file(track_id, audio_path)
 
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.post("/admin_web/delete/{track_id}")
     async def delete_track_post(request: Request, track_id: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         await delete_track(track_id)
         return RedirectResponse("/admin_web", status_code=302)
 
@@ -172,40 +165,36 @@ def create_app(bot):
     @app.get("/admin_web/broadcasts", response_class=HTMLResponse)
     async def broadcasts_list(request: Request):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         items = await broadcasts_all()
         return TEMPLATES.TemplateResponse("broadcasts_list.html", {"request": request, "items": items})
 
     @app.get("/admin_web/broadcasts/new", response_class=HTMLResponse)
     async def broadcasts_new(request: Request):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         return TEMPLATES.TemplateResponse("broadcasts_new.html", {"request": request})
 
     @app.post("/admin_web/broadcasts/preview", response_class=HTMLResponse)
     async def broadcasts_preview(
         request: Request,
         title: str = Form(""),
-        text: str = Form(""),
-        images: List[UploadFile] = File(default=[]),
-        videos: List[UploadFile] = File(default=[]),
-        files:  List[UploadFile] = File(default=[]),
+        text:  str = Form(""),
+        images: List[UploadFile] = File([]),
+        videos: List[UploadFile] = File([]),
+        files:  List[UploadFile] = File([]),
     ):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
 
         bid = await broadcast_create(title, text)
         os.makedirs("uploads/broadcasts", exist_ok=True)
 
-        async def _save_many(lst: List[UploadFile], kind: str):
-            for up in lst:
-                if not up.filename:
+        async def _save_many(lst, kind):
+            for up in lst or []:
+                if not up or not up.filename:
                     continue
-                name = os.path.basename(up.filename).replace("\x00", "")
-                path = os.path.join("uploads", "broadcasts", name)
+                path = os.path.join("uploads", "broadcasts", up.filename)
                 async with aiofiles.open(path, "wb") as f:
                     while chunk := await up.read(64 * 1024):
                         await f.write(chunk)
@@ -215,21 +204,20 @@ def create_app(bot):
         await _save_many(videos, "video")
         await _save_many(files,  "file")
 
+        # возвращаемся к списку — там увидите созданный черновик
         return RedirectResponse("/admin_web/broadcasts", status_code=302)
 
     @app.post("/admin_web/broadcasts/delete/{bid}")
     async def broadcasts_del(request: Request, bid: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         await broadcast_delete(bid)
         return RedirectResponse("/admin_web/broadcasts", status_code=302)
 
     @app.post("/admin_web/broadcasts/send/{bid}")
     async def broadcasts_send(request: Request, bid: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
 
         media = await broadcast_media(bid)
         title = None
@@ -244,6 +232,7 @@ def create_app(bot):
 
         from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, InputMediaDocument
 
+        # альбом (макс. 10)
         album = []
         for kind, path in media[:10]:
             if kind == "image":
@@ -259,7 +248,7 @@ def create_app(bot):
                     if text:
                         album[0].caption = text
                     await bot.send_media_group(uid, album)
-                if not album and text:
+                elif text:
                     await bot.send_message(uid, text)
                 sent += 1
             except Exception:
@@ -269,7 +258,7 @@ def create_app(bot):
         return RedirectResponse(f"/admin_web/broadcasts?sent={sent}&failed={failed}", status_code=302)
 
     # ---------- health ----------
-    @app.api_route("/health", methods=["GET", "HEAD"])
+    @app.api_route("/health", methods=["GET","HEAD"])
     async def _health_edge():
         return PlainTextResponse("ok")
 
