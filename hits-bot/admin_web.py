@@ -1,60 +1,33 @@
-# admin_web.py
 import os
 from typing import List, Optional
 
 from fastapi import FastAPI, Request, UploadFile, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import aiofiles
 
 from db import (
-    get_all_tracks, get_track_by_id, create_track, update_track, delete_track,
-    create_admin_token, pop_admin_token,
+    get_all_tracks, get_track_by_id,
+    create_track, update_track, delete_track,          # совместимые алиасы из db.py
+    update_track_file,
+    create_admin_token, consume_admin_token,
+    broadcasts_all, broadcast_create, broadcast_add_media,
+    broadcast_media, broadcast_delete, broadcast_mark_sent,
+    get_all_user_ids
 )
 
 TEMPLATES = Jinja2Templates(directory="templates")
-
-# --- опциональные импорты для рассылок (могут отсутствовать в db.py) ---
-HAS_BROADCASTS = True
-try:
-    from db import (
-        broadcasts_all, broadcast_create, broadcast_add_media, broadcast_media,
-        broadcast_delete, broadcast_mark_sent, get_all_user_ids,
-    )
-except Exception:
-    HAS_BROADCASTS = False
-
-    async def broadcasts_all():
-        return []
-
-    async def broadcast_create(title: str, text: str) -> int:
-        raise RuntimeError("Broadcasts are not enabled in db.py")
-
-    async def broadcast_add_media(*args, **kwargs):
-        raise RuntimeError("Broadcasts are not enabled in db.py")
-
-    async def broadcast_media(*args, **kwargs):
-        return []
-
-    async def broadcast_delete(*args, **kwargs):
-        raise RuntimeError("Broadcasts are not enabled in db.py")
-
-    async def broadcast_mark_sent(*args, **kwargs):
-        return
-
-    async def get_all_user_ids():
-        return []
-
-
-def _safe_url_prefix() -> str:
-    """Базовый префикс для статики/относительных путей (если нужно)."""
-    return ""
 
 
 def create_app(bot):
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret"))
+
+    # раздача /uploads (аудио/картинки) как статического контента
+    os.makedirs("uploads", exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
     # ---------- auth ----------
     def _is_authed(request: Request) -> bool:
@@ -65,7 +38,7 @@ def create_app(bot):
             return RedirectResponse("/admin_web/login", status_code=302)
 
     @app.get("/", response_class=HTMLResponse)
-    async def _root(_: Request):
+    def _root(request: Request):
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.get("/admin_web/login", response_class=HTMLResponse)
@@ -74,23 +47,20 @@ def create_app(bot):
 
     @app.post("/admin_web/login", response_class=HTMLResponse)
     async def login_post(request: Request, password: str = Form("")):
-        # 1) вход по одноразовому токену ?key=
-        token = request.query_params.get("key")
         ok = False
+        # 1) одноразовый токен ?key=...
+        token = request.query_params.get("key")
         if token:
-            user_id = await pop_admin_token(token)
+            user_id = await consume_admin_token(token)
             ok = user_id is not None
-        # 2) вход по паролю (SESSION_SECRET)
+        # 2) обычный пароль (SESSION_SECRET)
         if not ok and password and password == os.getenv("SESSION_SECRET", ""):
             ok = True
 
         if ok:
             request.session["adm_ok"] = True
             return RedirectResponse("/admin_web", status_code=302)
-
-        return TEMPLATES.TemplateResponse(
-            "login.html", {"request": request, "error": "Неверный токен или пароль"}
-        )
+        return TEMPLATES.TemplateResponse("login.html", {"request": request, "error": "Неверный токен или пароль"})
 
     @app.get("/admin_web/logout")
     async def logout(request: Request):
@@ -101,17 +71,9 @@ def create_app(bot):
     @app.get("/admin_web", response_class=HTMLResponse)
     async def tracks_page(request: Request):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         items = await get_all_tracks()
-        return TEMPLATES.TemplateResponse(
-            "tracks.html",
-            {
-                "request": request,
-                "items": items,
-                "has_broadcasts": HAS_BROADCASTS,
-            },
-        )
+        return TEMPLATES.TemplateResponse("tracks.html", {"request": request, "items": items})
 
     @app.post("/admin_web/upload")
     async def upload_track(
@@ -121,138 +83,113 @@ def create_app(bot):
         hint: Optional[UploadFile] = None,
     ):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
 
-        # Автоимя файла вида «Музыкальное бинго — 01.mp3»
+        # следующий порядковый номер
         items = await get_all_tracks()
         seq = len(items) + 1
+
+        # имя MP3 — с ДЛИННЫМ тире
         seq_name = f"Музыкальное бинго — {seq:02d}.mp3"
 
-        audio_path = ""
+        audio_path = None
         if audio and audio.filename:
             os.makedirs("uploads/audio", exist_ok=True)
             audio_path = os.path.join("uploads", "audio", seq_name)
             async with aiofiles.open(audio_path, "wb") as f:
-                while chunk := await audio.read(1024 * 64):
+                while chunk := await audio.read(64 * 1024):
                     await f.write(chunk)
 
-        hint_path = ""
+        hint_path = None
         if hint and hint.filename:
             os.makedirs("uploads/hints", exist_ok=True)
             ext = os.path.splitext(hint.filename)[1] or ".jpg"
             hint_path = os.path.join("uploads", "hints", f"hint_{seq:02d}{ext}")
             async with aiofiles.open(hint_path, "wb") as f:
-                while chunk := await hint.read(1024 * 64):
+                while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
 
-        # В БД пишем строку формата (title, hint_image, file_field)
-        await create_track(title or f"Хит #{seq:02d}", audio_path, hint_path)
+        # ВАЖНО: сохраняем в правильном порядке (title, HINT, AUDIO)
+        await create_track(title or f"Хит #{seq:02d}", hint_path or "", audio_path or "")
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.get("/admin_web/edit/{track_id}", response_class=HTMLResponse)
     async def edit_track_page(request: Request, track_id: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         row = await get_track_by_id(track_id)
-        return TEMPLATES.TemplateResponse(
-            "edit_track.html",
-            {
-                "request": request,
-                "row": row,
-                "has_broadcasts": HAS_BROADCASTS,
-            },
-        )
+        return TEMPLATES.TemplateResponse("edit_track.html", {"request": request, "row": row})
 
     @app.post("/admin_web/edit/{track_id}")
     async def edit_track_post(
-        request: Request,
-        track_id: int,
+        request: Request, track_id: int,
         title: str = Form(""),
         audio: Optional[UploadFile] = None,
         hint: Optional[UploadFile] = None,
     ):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
 
-        new_audio_path = None
-        if audio and audio.filename:
-            os.makedirs("uploads/audio", exist_ok=True)
-            # сохраняем с расширением из загружаемого файла; имя — оставим «как есть» либо
-            # можно перезаписать под «Музыкальное бинго — NN.mp3», но тут не меняем автоматически
-            ext = os.path.splitext(audio.filename)[1] or ".mp3"
-            # если имя не .mp3 — всё равно примем (Telegram воспроизводит), но расширение добавим
-            safe_name = audio.filename if audio.filename.endswith(ext) else f"{os.path.splitext(audio.filename)[0]}{ext}"
-            new_audio_path = os.path.join("uploads", "audio", safe_name)
-            async with aiofiles.open(new_audio_path, "wb") as f:
-                while chunk := await audio.read(1024 * 64):
-                    await f.write(chunk)
-
-        new_hint_path = None
+        # заменить картинку-подсказку
+        hint_path = None
         if hint and hint.filename:
             os.makedirs("uploads/hints", exist_ok=True)
             ext = os.path.splitext(hint.filename)[1] or ".jpg"
-            new_hint_path = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
-            async with aiofiles.open(new_hint_path, "wb") as f:
-                while chunk := await hint.read(1024 * 64):
+            hint_path = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
+            async with aiofiles.open(hint_path, "wb") as f:
+                while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
 
-        await update_track(track_id, title, new_audio_path, new_hint_path)
+        # заменить аудио
+        audio_path = None
+        if audio and audio.filename:
+            os.makedirs("uploads/audio", exist_ok=True)
+            # сохраняем тем же «плейлистным» именем с длинным тире
+            audio_path = os.path.join("uploads", "audio", f"Музыкальное бинго — {track_id:02d}.mp3")
+            async with aiofiles.open(audio_path, "wb") as f:
+                while chunk := await audio.read(64 * 1024):
+                    await f.write(chunk)
+
+        # обновляем метаданные/пути
+        if title or hint_path is not None:
+            await update_track(track_id, title or "", hint_path if hint_path is not None else (await get_track_by_id(track_id))[2])
+        if audio_path is not None:
+            await update_track_file(track_id, audio_path)
+
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.post("/admin_web/delete/{track_id}")
     async def delete_track_post(request: Request, track_id: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
+        if guard: return guard
         await delete_track(track_id)
         return RedirectResponse("/admin_web", status_code=302)
 
-    # ---------- broadcasts (опционально) ----------
+    # ---------- broadcasts ----------
     @app.get("/admin_web/broadcasts", response_class=HTMLResponse)
     async def broadcasts_list(request: Request):
         guard = _need_auth(request)
-        if guard:
-            return guard
-        if not HAS_BROADCASTS:
-            return HTMLResponse(
-                "<h2>Рассылки отключены: в db.py нет соответствующих функций.</h2>"
-                "<p>Добавь их, либо игнорируй раздел.</p>",
-                status_code=200,
-            )
+        if guard: return guard
         items = await broadcasts_all()
-        return TEMPLATES.TemplateResponse(
-            "broadcasts_list.html",
-            {"request": request, "items": items, "has_broadcasts": HAS_BROADCASTS},
-        )
+        return TEMPLATES.TemplateResponse("broadcasts_list.html", {"request": request, "items": items})
 
     @app.get("/admin_web/broadcasts/new", response_class=HTMLResponse)
     async def broadcasts_new(request: Request):
         guard = _need_auth(request)
-        if guard:
-            return guard
-        if not HAS_BROADCASTS:
-            return HTMLResponse("<h2>Рассылки отключены.</h2>", status_code=200)
-        return TEMPLATES.TemplateResponse(
-            "broadcasts_new.html", {"request": request, "has_broadcasts": HAS_BROADCASTS}
-        )
+        if guard: return guard
+        return TEMPLATES.TemplateResponse("broadcasts_new.html", {"request": request})
 
     @app.post("/admin_web/broadcasts/preview", response_class=HTMLResponse)
     async def broadcasts_preview(
         request: Request,
         title: str = Form(""),
         text: str = Form(""),
-        images: List[UploadFile] | None = None,
-        videos: List[UploadFile] | None = None,
-        files: List[UploadFile] | None = None,
+        images: List[UploadFile] = [],
+        videos: List[UploadFile] = [],
+        files:  List[UploadFile] = [],
     ):
         guard = _need_auth(request)
-        if guard:
-            return guard
-        if not HAS_BROADCASTS:
-            return HTMLResponse("<h2>Рассылки отключены.</h2>", status_code=200)
+        if guard: return guard
 
         bid = await broadcast_create(title, text)
         os.makedirs("uploads/broadcasts", exist_ok=True)
@@ -263,33 +200,27 @@ def create_app(bot):
                     continue
                 path = os.path.join("uploads", "broadcasts", up.filename)
                 async with aiofiles.open(path, "wb") as f:
-                    while chunk := await up.read(1024 * 64):
+                    while chunk := await up.read(64 * 1024):
                         await f.write(chunk)
                 await broadcast_add_media(bid, kind, path)
 
         await _save_many(images, "image")
         await _save_many(videos, "video")
-        await _save_many(files, "file")
+        await _save_many(files,  "file")
 
         return RedirectResponse("/admin_web/broadcasts", status_code=302)
 
     @app.post("/admin_web/broadcasts/delete/{bid}")
     async def broadcasts_del(request: Request, bid: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
-        if not HAS_BROADCASTS:
-            return HTMLResponse("<h2>Рассылки отключены.</h2>", status_code=200)
+        if guard: return guard
         await broadcast_delete(bid)
         return RedirectResponse("/admin_web/broadcasts", status_code=302)
 
     @app.post("/admin_web/broadcasts/send/{bid}")
     async def broadcasts_send(request: Request, bid: int):
         guard = _need_auth(request)
-        if guard:
-            return guard
-        if not HAS_BROADCASTS:
-            return HTMLResponse("<h2>Рассылки отключены.</h2>", status_code=200)
+        if guard: return guard
 
         media = await broadcast_media(bid)
         title = None
@@ -302,12 +233,7 @@ def create_app(bot):
         sent = 0
         failed = 0
 
-        from aiogram.types import (
-            FSInputFile,
-            InputMediaPhoto,
-            InputMediaVideo,
-            InputMediaDocument,
-        )
+        from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, InputMediaDocument
 
         album = []
         for kind, path in media[:10]:
@@ -331,9 +257,7 @@ def create_app(bot):
                 failed += 1
 
         await broadcast_mark_sent(bid)
-        return RedirectResponse(
-            f"/admin_web/broadcasts?sent={sent}&failed={failed}", status_code=302
-        )
+        return RedirectResponse(f"/admin_web/broadcasts?sent={sent}&failed={failed}", status_code=302)
 
     # ---------- health ----------
     @app.api_route("/health", methods=["GET", "HEAD"])
