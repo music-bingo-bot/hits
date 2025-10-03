@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Админка — Лучшие хиты</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, Arial; padding: 24px; }
+    h1 { margin-top: 0 }
+    .row { display: grid; grid-template-columns: 56px 1fr 120px 240px 160px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee; }
+    .row.head { font-weight: 600; border-bottom: 2px solid #ddd;}
+    img.thumb { max-height: 50px; border-radius: 8px; }
+    form.inline { display: inline-block; margin: 0; }
+    input, button { padding: 8px 10px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Админка — Лучшие хиты</h1>
+
+  <h2>Загрузить новый трек</h2>
+  <form action="/admin_web/tracks/create" method="post" enctype="multipart/form-data">
+    <div><input type="text" name="title" placeholder="Название трека" required></div>
+    <div><input type="text" name="hint_text" placeholder="Текстовая подсказка (необязательно)"></div>
+    <div><input type="file" name="audio" accept="audio/*" required></div>
+    <div><input type="file" name="hint_image" accept="image/*"></div>
+    <div><button type="submit">Загрузить</button></div>
+  </form>
+
+  <h2>Треки</h2>
+  <div class="row head">
+    <div>ID</div><div>Название</div><div>Подсказка</div><div>Файлы</div><div>Действия</div>
+  </div>
+  {% for t in tracks %}
+  <div class="row">
+    <div>#{{ t[0] }}</div>
+    <div>{{ t[1] }}</div>
+    <div>
+      {% if t[4] %}
+        <img class="thumb" src="/{{ t[4] }}">
+      {% elif t[2] %}
+        {{ t[2] }}
+      {% else %}
+        —
+      {% endif %}
+    </div>
+    <div>
+      <div>🎵 {{ t[3] }}</div>
+      {% if t[4] %}<div>🖼 {{ t[4] }}</div>{% endif %}
+    </div>
+    <div>
+      <form class="inline" action="/admin_web/tracks/{{ t[0] }}/edit" method="post" enctype="multipart/form-data">
+        <input type="text" name="title" placeholder="Новое название">
+        <input type="text" name="hint_text" placeholder="Новая текст. подсказка">
+        <input type="file" name="audio" accept="audio/*">
+        <input type="file" name="hint_image" accept="image/*">
+        <button>Сохранить</button>
+      </form>
+      <form class="inline" action="/admin_web/tracks/{{ t[0] }}/delete" method="post" onsubmit="return confirm('Удалить трек #{{ t[0] }}?')">
+        <button>Удалить</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</body>
+</html>

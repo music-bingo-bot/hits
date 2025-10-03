@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Вход — Админка</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, Arial; padding: 24px; max-width: 500px; margin: 0 auto; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 20px; }
+    input, button { font-size: 16px; padding: 10px 14px; }
+    input { width: 100%; margin: 8px 0 16px; }
+    button { background: black; color: white; border: 0; border-radius: 8px; cursor: pointer; }
+    .error { color: #b00020; margin: 8px 0 0; }
+  </style>
+</head>
+<body>
+  <h1>Вход в админку</h1>
+  <div class="card">
+    <form action="/admin_web/login" method="post">
+      <label>Пароль</label>
+      <input type="password" name="password" placeholder="SESSION_SECRET" required>
+      <button type="submit">Войти</button>
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    </form>
+  </div>
+</body>
+</html>
