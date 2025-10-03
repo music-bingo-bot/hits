@@ -1,0 +1,24 @@
+<!DOCTYPE html><html lang="ru"><head>
+<meta charset="UTF-8"><title>Редактирование трека</title>
+<style>
+ body{font-family:Arial,sans-serif;max-width:800px;margin:20px auto;padding:20px}
+ input[type=text],input[type=file]{width:100%;padding:8px;border:1px solid #ccc;border-radius:4px}
+ img.hint{max-height:100px;border-radius:6px}
+ button,a.btn{padding:8px 16px;background:#007cba;color:#fff;text-decoration:none;border:none;border-radius:4px;cursor:pointer}
+ a.btn{display:inline-block}
+ button:hover,a.btn:hover{background:#005a85}
+</style>
+</head><body>
+<h1>Редактировать трек #{{ row[0] }}</h1>
+<p><a class="btn" href="/admin_web">← Назад</a></p>
+
+<form action="/admin_web/edit/{{ row[0] }}" method="post" enctype="multipart/form-data">
+  <p><label>Название<br><input name="title" value="{{ row[1] }}"></label></p>
+  <p>Текущая подсказка:<br>
+     {% if row[2] %}<img class="hint" src="/{{ row[2] }}">{% else %}—{% endif %}
+  </p>
+  <p><label>Новая картинка-подсказка (необязательно)<br><input type="file" name="hint" accept="image/*"></label></p>
+  <p><label>Новый аудио-файл MP3 (необязательно)<br><input type="file" name="audio" accept="audio/*"></label></p>
+  <p><button>Сохранить</button></p>
+</form>
+</body></html>
