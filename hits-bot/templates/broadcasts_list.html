@@ -1,0 +1,35 @@
+<!DOCTYPE html><html lang="ru"><head>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 20px auto; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .actions a, button { margin-right: 8px; padding: 8px 16px; background: #007cba; color: white; text-decoration: none; border: none; border-radius: 4px; cursor: pointer; }
+        .actions a:hover, button:hover { background: #005a85; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        input[type="text"], input[type="file"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .note { color: #555; margin: 10px 0; }
+    </style>
+<meta charset="UTF-8"><title>Рассылки</title></head><body><div class="header"><h1>📣 Рассылки</h1><div class="actions"><a href="/admin_web">К трекам</a><a href="/admin_web/broadcasts/new">Новая рассылка</a></div></div>
+<h1>Рассылки</h1>
+<p><a href="/admin_web">← к админке</a> | <a href="/admin_web/broadcasts/new">Новая рассылка</a></p>
+{% if request.query_params.get('sent') %}
+<p>Отправлено: {{ request.query_params.get('sent') }} · Ошибок: {{ request.query_params.get('failed') }}</p>
+{% endif %}
+<table border="1" cellpadding="6">
+<tr><th>ID</th><th>Заголовок</th><th>Короткий текст</th><th>Создано</th><th>Отправлено</th><th>Действия</th></tr>
+{% for it in items %}
+<tr>
+<td>{{ it.id }}</td>
+<td>{{ it.title or '—' }}</td>
+<td>{{ (it.text or '')[:80] }}</td>
+<td>{{ it.created_at }}</td>
+<td>{{ it.sent_at or '—' }}</td>
+<td>
+  <form method="post" action="/admin_web/broadcasts/send/{{ it.id }}" style="display:inline"><button>Отправить</button></form>
+  <form method="post" action="/admin_web/broadcasts/delete/{{ it.id }}" style="display:inline" onsubmit="return confirm('Удалить?')"><button>Удалить</button></form>
+</td>
+</tr>
+{% endfor %}
+</table>
+</body></html>

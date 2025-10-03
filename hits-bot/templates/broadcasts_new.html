@@ -1,0 +1,24 @@
+<!DOCTYPE html><html lang="ru"><head>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 20px auto; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .actions a, button { margin-right: 8px; padding: 8px 16px; background: #007cba; color: white; text-decoration: none; border: none; border-radius: 4px; cursor: pointer; }
+        .actions a:hover, button:hover { background: #005a85; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        input[type="text"], input[type="file"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .note { color: #555; margin: 10px 0; }
+    </style>
+<meta charset="UTF-8"><title>Новая рассылка</title></head><body><div class="header"><h1>Новая рассылка</h1><div class="actions"><a href="/admin_web/broadcasts">← Список рассылок</a></div></div>
+<h1>Новая рассылка</h1>
+<p><a href="/admin_web/broadcasts">← к рассылкам</a></p>
+<form action="/admin_web/broadcasts/preview" method="post" enctype="multipart/form-data">
+<p><label>Заголовок<br><input name="title"></label></p>
+<p><label>Текст (общая подпись альбома)<br><textarea name="text" rows="6"></textarea></label></p>
+<p><label>Картинки (несколько)<br><input type="file" name="images" multiple accept="image/*"></label></p>
+<p><label>Видео (несколько)<br><input type="file" name="videos" multiple accept="video/*"></label></p>
+<p><label>Доп. файлы (аудио/док)<br><input type="file" name="files" multiple></label></p>
+<p><button>Предпросмотр</button></p>
+</form>
+</body></html>
