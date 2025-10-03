@@ -1,37 +1,66 @@
 <!DOCTYPE html><html lang="ru"><head>
-  <meta charset="UTF-8">
-  <title>Новая рассылка</title>
-  <style>
-    body { font-family: Arial, sans-serif; max-width: 1000px; margin: 20px auto; padding: 20px; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-    .actions a, button { margin-right: 8px; padding: 8px 16px; background: #007cba; color: white; text-decoration: none; border: none; border-radius: 4px; cursor: pointer; }
-    .actions a:hover, button:hover { background: #005a85; }
-    input[type="text"], input[type="file"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>Новая рассылка</h1>
-    <div class="actions"><a href="/admin_web/broadcasts">← Список рассылок</a></div>
+<meta charset="UTF-8"><title>Рассылки</title>
+<style>
+ body{font-family:Arial,sans-serif;max-width:1000px;margin:20px auto;padding:20px}
+ .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+ .actions a,button{margin-right:8px;padding:8px 16px;background:#007cba;color:#fff;text-decoration:none;border:none;border-radius:4px;cursor:pointer}
+ .actions a:hover,button:hover{background:#005a85}
+ table{width:100%;border-collapse:collapse;margin-top:20px}
+ th,td{border:1px solid #ddd;padding:10px;text-align:left;vertical-align:top}
+ th{background:#f7f7f7}
+ form.inline{display:inline}
+ .muted{color:#666}
+ .ok{color:green;font-weight:600}
+ .draft{color:#a66;font-weight:600}
+</style>
+</head><body>
+<div class="header">
+  <h1>📣 Рассылки</h1>
+  <div class="actions">
+    <a href="/admin_web">← К трекам</a>
+    <a href="/admin_web/broadcasts/new">+ Новая рассылка</a>
   </div>
+</div>
 
-  <form action="/admin_web/broadcasts/preview" method="post" enctype="multipart/form-data">
-    <p><label>Заголовок<br><input name="title"></label></p>
-    <p><label>Текст (подпись к альбому)<br><textarea name="text" rows="6"></textarea></label></p>
+{% if request.query_params.sent %}
+<p class="muted">Отправлено: {{ request.query_params.sent }}, ошибок: {{ request.query_params.failed or 0 }}</p>
+{% endif %}
 
-    <p><label>Картинки (несколько)<br>
-      <input type="file" name="images" multiple accept="image/*">
-    </label></p>
-
-    <p><label>Видео (несколько)<br>
-      <input type="file" name="videos" multiple accept="video/*">
-    </label></p>
-
-    <p><label>Доп. файлы (документы/аудио и т.п.)<br>
-      <input type="file" name="files" multiple>
-    </label></p>
-
-    <p><button>Предпросмотр</button></p>
-  </form>
-</body>
-</html>
+<table>
+  <tr>
+    <th>ID</th>
+    <th>Заголовок</th>
+    <th>Создана</th>
+    <th>Статус</th>
+    <th>Действия</th>
+  </tr>
+  {% for id, title, text, created_at, sent_at in items %}
+  <tr>
+    <td>{{ id }}</td>
+    <td>{{ title or '—' }}</td>
+    <td class="muted">{{ created_at }}</td>
+    <td>
+      {% if sent_at %}
+        <span class="ok">Отправлена</span><br><span class="muted">{{ sent_at }}</span>
+      {% else %}
+        <span class="draft">Черновик</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if not sent_at %}
+        <form class="inline" method="post" action="/admin_web/broadcasts/send/{{ id }}">
+          <button>Отправить</button>
+        </form>
+        <form class="inline" method="post" action="/admin_web/broadcasts/delete/{{ id }}" onsubmit="return confirm('Удалить рассылку?')">
+          <button>Удалить</button>
+        </form>
+      {% else %}
+        <form class="inline" method="post" action="/admin_web/broadcasts/delete/{{ id }}" onsubmit="return confirm('Удалить?')">
+          <button>Удалить</button>
+        </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</body></html>
