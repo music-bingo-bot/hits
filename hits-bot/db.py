@@ -1,119 +1,173 @@
-import os, time, secrets, string
 import aiosqlite
+import os
+from datetime import datetime, timedelta
+from typing import Optional, List, Tuple
 
-def _now_ts() -> int:
-    return int(time.time())
+DB_PATH = os.path.join("uploads", "db.sqlite3")
 
 async def init_db():
     os.makedirs("uploads", exist_ok=True)
-    os.makedirs("uploads/audio", exist_ok=True)
-    os.makedirs("uploads/hints", exist_ok=True)
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        await db.execute("""            CREATE TABLE IF NOT EXISTS tracks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                film_title TEXT NOT NULL,
-                hint TEXT,
-                file_field TEXT NOT NULL,
-                hint_image TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS tracks(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            hint_image TEXT,           -- путь к картинке-подсказке (uploads/hints/...)
+            file_field TEXT NOT NULL    -- file_id TG или локальный путь uploads/audio/....
+        );
         """)
-        await db.execute("""            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS settings(
+            key TEXT PRIMARY KEY,
+            val TEXT
+        );
         """)
-        await db.execute("""            CREATE TABLE IF NOT EXISTS admin_tokens (
-                token TEXT PRIMARY KEY,
-                user_id INTEGER,
-                expires_at INTEGER
-            )
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY,        -- telegram user id
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
-        await db.execute("""            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS admin_tokens(
+            token TEXT PRIMARY KEY,
+            user_id INTEGER,
+            expires_at TEXT
+        );
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS broadcasts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            text TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            sent_at TEXT
+        );
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS broadcast_media(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            broadcast_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,              -- image | video | file
+            path TEXT NOT NULL,
+            FOREIGN KEY(broadcast_id) REFERENCES broadcasts(id) ON DELETE CASCADE
+        );
         """)
         await db.commit()
 
-async def save_user(user_id: int, username: str|None, first_name: str|None, last_name: str|None):
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO users (id, username, first_name, last_name) VALUES (?, ?, ?, ?)",
-            (user_id, username, first_name, last_name)
-        )
-        await db.commit()
-
-async def get_all_tracks():
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        cur = await db.execute("SELECT id, film_title, hint, file_field, hint_image FROM tracks ORDER BY id")
-        return await cur.fetchall()
-
-async def get_track_by_id(tid: int):
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        cur = await db.execute("SELECT id, film_title, hint, file_field, hint_image FROM tracks WHERE id = ?", (tid,))
-        return await cur.fetchone()
-
-async def insert_track(title: str, hint: str|None, file_field: str, hint_image: str|None):
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        await db.execute(
-            "INSERT INTO tracks (film_title, hint, file_field, hint_image) VALUES (?, ?, ?, ?)",
-            (title, hint, file_field, hint_image)
-        )
-        await db.commit()
-
-async def update_track(tid: int, title: str|None=None, hint: str|None=None,
-                       file_field: str|None=None, hint_image: str|None=None):
-    fields, vals = [], []
-    if title is not None:      fields.append("film_title = ?"); vals.append(title)
-    if hint is not None:       fields.append("hint = ?"); vals.append(hint)
-    if file_field is not None: fields.append("file_field = ?"); vals.append(file_field)
-    if hint_image is not None: fields.append("hint_image = ?"); vals.append(hint_image)
-    if not fields:
-        return
-    vals.append(tid)
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        await db.execute(f"UPDATE tracks SET {', '.join(fields)} WHERE id = ?", vals)
-        await db.commit()
-
-async def delete_track(tid: int):
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        await db.execute("DELETE FROM tracks WHERE id = ?", (tid,))
-        await db.commit()
-
-async def set_setting(key: str, value: str|None):
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        if value is None:
-            await db.execute("DELETE FROM settings WHERE key = ?", (key,))
-        else:
-            await db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-        await db.commit()
-
-async def get_setting(key: str) -> str|None:
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        cur = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+# ----- settings -----
+async def get_setting(key:str)->Optional[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT val FROM settings WHERE key=?", (key,))
         row = await cur.fetchone()
         return row[0] if row else None
 
-def _rand_token(n=40):
-    alphabet = string.ascii_letters + string.digits
-    import random
-    return ''.join(random.choice(alphabet) for _ in range(n))
+async def set_setting(key:str, val:str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO settings(key,val) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET val=excluded.val", (key,val))
+        await db.commit()
 
-async def create_admin_token(user_id: int, ttl_minutes: int = 10) -> str:
-    token = _rand_token(48)
-    expires = _now_ts() + ttl_minutes * 60
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        await db.execute("INSERT INTO admin_tokens (token, user_id, expires_at) VALUES (?, ?, ?)", (token, user_id, expires))
+# ----- users -----
+async def save_user(uid:int, username:str|None, first:str|None, last:str|None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO users(id, username, first_name, last_name)
+            VALUES(?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, last_name=excluded.last_name
+        """, (uid, username, first, last))
+        await db.commit()
+
+async def get_all_user_ids()->List[int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id FROM users")
+        return [r[0] for r in await cur.fetchall()]
+
+# ----- admin tokens -----
+async def create_admin_token(user_id:int, ttl_minutes:int=10)->str:
+    import secrets
+    token = secrets.token_urlsafe(24)
+    exp = (datetime.utcnow() + timedelta(minutes=ttl_minutes)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO admin_tokens(token,user_id,expires_at) VALUES(?,?,?)", (token,user_id,exp))
         await db.commit()
     return token
 
-async def validate_admin_token(token: str) -> int|None:
-    now = _now_ts()
-    async with aiosqlite.connect("uploads/db.sqlite3") as db:
-        cur = await db.execute("SELECT user_id FROM admin_tokens WHERE token = ? AND expires_at >= ?", (token, now))
+async def pop_admin_token(token:str)->Optional[int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id, expires_at FROM admin_tokens WHERE token=?", (token,))
         row = await cur.fetchone()
-        return row[0] if row else None
+        if not row: return None
+        user_id, exp = row
+        await db.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
+        await db.commit()
+        if exp and datetime.utcnow() > datetime.fromisoformat(exp):
+            return None
+        return user_id
+
+# ----- tracks -----
+async def get_all_tracks()->List[Tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id, title, hint_image, file_field FROM tracks ORDER BY id ASC")
+        return await cur.fetchall()
+
+async def get_track_by_id(track_id:int)->Optional[Tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id, title, hint_image, file_field FROM tracks WHERE id=?", (track_id,))
+        return await cur.fetchone()
+
+async def create_track(title:str, file_field:str, hint_image:str|None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO tracks(title, file_field, hint_image) VALUES(?,?,?)", (title, file_field, hint_image))
+        await db.commit()
+
+async def update_track(track_id:int, title:str, file_field:str|None, hint_image:str|None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await get_track_by_id(track_id)
+        if not row: return
+        _, _, old_hint, old_file = row
+        file_value = file_field if file_field else old_file
+        hint_value = hint_image if hint_image else old_hint
+        await db.execute("UPDATE tracks SET title=?, file_field=?, hint_image=? WHERE id=?",
+                         (title, file_value, hint_value, track_id))
+        await db.commit()
+
+async def delete_track(track_id:int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM tracks WHERE id=?", (track_id,))
+        await db.commit()
+
+# ----- broadcasts -----
+async def broadcasts_all():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id,title,text,created_at,sent_at FROM broadcasts ORDER BY id DESC")
+        return await cur.fetchall()
+
+async def broadcast_create(title:str, text:str)->int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("INSERT INTO broadcasts(title,text) VALUES(?,?)", (title,text))
+        await db.commit()
+        return cur.lastrowid
+
+async def broadcast_add_media(bid:int, kind:str, path:str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO broadcast_media(broadcast_id,kind,path) VALUES(?,?,?)", (bid,kind,path))
+        await db.commit()
+
+async def broadcast_media(bid:int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT kind,path FROM broadcast_media WHERE broadcast_id=? ORDER BY id", (bid,))
+        return await cur.fetchall()
+
+async def broadcast_delete(bid:int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM broadcast_media WHERE broadcast_id=?", (bid,))
+        await db.execute("DELETE FROM broadcasts WHERE id=?", (bid,))
+        await db.commit()
+
+async def broadcast_mark_sent(bid:int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE broadcasts SET sent_at=? WHERE id=?", (datetime.utcnow().isoformat(), bid))
+        await db.commit()
