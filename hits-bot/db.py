@@ -12,8 +12,8 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     film_title TEXT NOT NULL,
-    hint TEXT NOT NULL,            -- для нас это путь к картинке-подсказке
-    file_id TEXT NOT NULL          -- здесь храним либо file_id TG, либо путь к mp3 (uploads/audio/..)
+    hint TEXT NOT NULL,            -- путь к картинке-подсказке
+    file_id TEXT NOT NULL          -- file_id TG или путь к mp3 (uploads/audio/..)
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -76,7 +76,7 @@ async def init_db():
 
 # ---------- Tracks ----------
 async def add_track(film_title: str, hint: str, file_id: str) -> int:
-    """Базовая функция добавления трека (title, hint_image_path, audio_file_id_or_path)."""
+    """Добавление трека (title, hint_image_path, audio_file_id_or_path)."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
         cur = await db.execute(
@@ -157,7 +157,6 @@ async def get_setting(key: str) -> str | None:
 
 # ---------- Admin tokens ----------
 async def create_admin_token(user_id: int, ttl_minutes: int = 10) -> str:
-    import secrets, time
     token = secrets.token_urlsafe(24)
     expires = int(time.time()) + ttl_minutes * 60
     async with aiosqlite.connect(DB_PATH) as db:
@@ -170,7 +169,6 @@ async def create_admin_token(user_id: int, ttl_minutes: int = 10) -> str:
     return token
 
 async def consume_admin_token(token: str) -> int | None:
-    import time
     now = int(time.time())
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
@@ -179,14 +177,19 @@ async def consume_admin_token(token: str) -> int | None:
             (token,)
         )
         row = await cur.fetchone()
-        if not row:
-            return None
-        user_id, exp = row
+        # одноразовое использование — удаляем в любом случае
         await db.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
         await db.commit()
-        if exp < now:
-            return None
-        return user_id
+
+    if not row:
+        return None
+    user_id, exp = row
+    if exp < now:
+        return None
+    return user_id
+
+# Совместимость с названием, которое использует admin_web.py
+pop_admin_token = consume_admin_token
 
 # ---------- Users ----------
 async def save_user(user_id: int, username: str | None, first_name: str | None, last_name: str | None):
