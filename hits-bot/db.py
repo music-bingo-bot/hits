@@ -1,16 +1,17 @@
 # db.py
-import os
 import aiosqlite
+from datetime import datetime, timedelta
 
-DB_PATH = os.path.join("uploads", "db.sqlite3")
+DB_PATH = "uploads/db.sqlite3"
 
-SCHEMA_SQL = """
+CREATE_SQL = '''
+PRAGMA foreign_keys = ON;
+
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    -- раньше был hint TEXT, теперь храним путь к картинке
-    hint_image TEXT,
-    file_field TEXT NOT NULL
+    film_title TEXT NOT NULL,
+    hint TEXT NOT NULL,            -- для нас это путь к картинке-подсказке
+    file_id TEXT NOT NULL          -- здесь храним либо file_id TG, либо путь к mp3 (uploads/audio/..)
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -18,131 +19,255 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     first_name TEXT,
     last_name TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS broadcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    text TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sent_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_media (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    broadcast_id INTEGER REFERENCES broadcasts(id) ON DELETE CASCADE,
+    kind TEXT CHECK(kind IN ('image','video','file')),
+    path TEXT
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    broadcast_id INTEGER REFERENCES broadcasts(id) ON DELETE CASCADE,
+    user_id INTEGER,
+    ok INTEGER,
+    error TEXT,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
-    value TEXT
+    value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS admin_tokens (
     token TEXT PRIMARY KEY,
-    admin_id INTEGER NOT NULL,
-    expires_at TIMESTAMP NOT NULL
+    user_id INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
 );
-"""
 
-MIGRATIONS = [
-    # добавим колонку hint_image, если её нет (на случай старой БД)
-    ("ALTER TABLE tracks ADD COLUMN hint_image TEXT", "PRAGMA table_info(tracks)", "hint_image"),
-]
+CREATE INDEX IF NOT EXISTS idx_broadcast_media_broadcast_id ON broadcast_media(broadcast_id);
+CREATE INDEX IF NOT EXISTS idx_broadcasts_created_at ON broadcasts(COALESCE(sent_at, created_at));
+CREATE INDEX IF NOT EXISTS idx_users_joined_at ON users(joined_at);
+'''
 
+# ---------- Init ----------
 async def init_db():
-    os.makedirs("uploads", exist_ok=True)
-    os.makedirs(os.path.join("uploads", "audio"), exist_ok=True)
-    os.makedirs(os.path.join("uploads", "hints"), exist_ok=True)
-
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.executescript(SCHEMA_SQL)
-        # простая миграция: добавить колонку hint_image при отсутствии
-        cur = await db.execute("PRAGMA table_info(tracks)")
-        cols = [row[1] for row in await cur.fetchall()]
-        if "hint_image" not in cols:
-            await db.execute("ALTER TABLE tracks ADD COLUMN hint_image TEXT")
+        await db.execute("PRAGMA journal_mode=WAL;")
+        await db.execute("PRAGMA foreign_keys = ON;")
+        for stmt in CREATE_SQL.split(";"):
+            if stmt.strip():
+                await db.execute(stmt)
         await db.commit()
+
+# ---------- Tracks ----------
+async def add_track(film_title: str, hint: str, file_id: str) -> int:
+    """Базовая функция добавления трека (title, hint_image_path, audio_file_id_or_path)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute(
+            "INSERT INTO tracks (film_title, hint, file_id) VALUES (?, ?, ?)",
+            (film_title, hint, file_id)
+        )
+        await db.commit()
+        return cur.lastrowid
+
+async def list_tracks(limit: int = 1000, offset: int = 0):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute(
+            "SELECT id, film_title, hint FROM tracks ORDER BY id LIMIT ? OFFSET ?",
+            (limit, offset)
+        )
+        return await cur.fetchall()
 
 async def get_all_tracks():
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT id, title, hint_image, file_field FROM tracks ORDER BY id ASC")
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute("SELECT id, film_title, hint, file_id FROM tracks ORDER BY id")
         return await cur.fetchall()
 
 async def get_track_by_id(track_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT id, title, hint_image, file_field FROM tracks WHERE id = ?", (track_id,))
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute(
+            "SELECT id, film_title, hint, file_id FROM tracks WHERE id=?",
+            (track_id,)
+        )
         return await cur.fetchone()
 
-async def create_track(title: str, file_field: str, hint_image: str | None):
+async def remove_track(track_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute("DELETE FROM tracks WHERE id=?", (track_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+async def update_track(track_id: int, film_title: str, hint: str):
+    """Обновить только название и путь к подсказке (картинке)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
         await db.execute(
-            "INSERT INTO tracks (title, file_field, hint_image) VALUES (?, ?, ?)",
-            (title, file_field, hint_image)
+            "UPDATE tracks SET film_title=?, hint=? WHERE id=?",
+            (film_title, hint, track_id)
         )
         await db.commit()
 
-async def update_track(track_id: int, title: str | None = None,
-                       file_field: str | None = None, hint_image: str | None = None):
-    sets, vals = [], []
-    if title is not None:
-        sets.append("title = ?"); vals.append(title)
-    if file_field is not None:
-        sets.append("file_field = ?"); vals.append(file_field)
-    if hint_image is not None:
-        sets.append("hint_image = ?"); vals.append(hint_image)
-    if not sets:
-        return
-    vals.append(track_id)
+async def update_track_file(track_id: int, file_id: str):
+    """Обновить audio (file_id или путь к mp3)."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(f"UPDATE tracks SET {', '.join(sets)} WHERE id = ?", vals)
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute(
+            "UPDATE tracks SET file_id=? WHERE id=?",
+            (file_id, track_id)
+        )
         await db.commit()
 
-async def delete_track(track_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
-        await db.commit()
-
-# settings
-async def get_setting(key: str) -> str | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        row = await cur.fetchone()
-        return row[0] if row else None
-
+# ---------- Settings ----------
 async def set_setting(key: str, value: str):
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
         await db.execute(
-            "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO settings(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value)
         )
         await db.commit()
 
-# admin tokens (как у тебя было)
-import secrets, datetime
-async def create_admin_token(admin_id: int, ttl_minutes: int = 10) -> str:
-    token = secrets.token_urlsafe(24)
-    expires = datetime.datetime.utcnow() + datetime.timedelta(minutes=ttl_minutes)
+async def get_setting(key: str) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO admin_tokens(token, admin_id, expires_at) VALUES (?, ?, ?)",
-                         (token, admin_id, expires.isoformat()))
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+# ---------- Admin tokens ----------
+async def create_admin_token(user_id: int, ttl_minutes: int = 10) -> str:
+    import secrets, time
+    token = secrets.token_urlsafe(24)
+    expires = int(time.time()) + ttl_minutes * 60
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute(
+            "INSERT INTO admin_tokens(token,user_id,expires_at) VALUES(?,?,?)",
+            (token, user_id, expires)
+        )
         await db.commit()
     return token
 
-async def pop_admin_token(token: str) -> int | None:
+async def consume_admin_token(token: str) -> int | None:
+    import time
+    now = int(time.time())
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT admin_id, expires_at FROM admin_tokens WHERE token = ?", (token,))
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute(
+            "SELECT user_id, expires_at FROM admin_tokens WHERE token=?",
+            (token,)
+        )
         row = await cur.fetchone()
         if not row:
             return None
-        admin_id, expires_at = row
-        try:
-            exp = datetime.datetime.fromisoformat(expires_at)
-        except Exception:
-            exp = datetime.datetime.utcnow() - datetime.timedelta(seconds=1)
-        await db.execute("DELETE FROM admin_tokens WHERE token = ?", (token,))
+        user_id, exp = row
+        await db.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
         await db.commit()
-        if exp < datetime.datetime.utcnow():
+        if exp < now:
             return None
-        return admin_id
+        return user_id
 
-# users
-async def save_user(uid: int, username: str | None, first: str | None, last: str | None):
+# ---------- Users ----------
+async def save_user(user_id: int, username: str | None, first_name: str | None, last_name: str | None):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO users(user_id, username, first_name, last_name)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-              username=excluded.username,
-              first_name=excluded.first_name,
-              last_name=excluded.last_name
-        """, (uid, username, first, last))
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute(
+            """INSERT INTO users (user_id, username, first_name, last_name)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 username=excluded.username,
+                 first_name=excluded.first_name,
+                 last_name=excluded.last_name""",
+            (user_id, username, first_name, last_name)
+        )
         await db.commit()
+
+async def get_all_user_ids() -> list[int]:
+    """Для рассылок: список всех user_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM users")
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+# ---------- Broadcasts ----------
+async def create_broadcast(title: str, text: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute(
+            "INSERT INTO broadcasts (title, text) VALUES (?,?)",
+            (title, text)
+        )
+        await db.commit()
+        return cur.lastrowid
+
+async def add_broadcast_media(bid: int, kind: str, path: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute(
+            "INSERT INTO broadcast_media (broadcast_id, kind, path) VALUES (?,?,?)",
+            (bid, kind, path)
+        )
+        await db.commit()
+
+async def list_broadcasts():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute(
+            "SELECT id, title, text, created_at, sent_at "
+            "FROM broadcasts "
+            "ORDER BY COALESCE(sent_at, created_at) DESC"
+        )
+        return await cur.fetchall()
+
+async def get_broadcast_media(bid: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        cur = await db.execute(
+            "SELECT kind, path FROM broadcast_media WHERE broadcast_id=? ORDER BY id",
+            (bid,)
+        )
+        return await cur.fetchall()
+
+async def mark_broadcast_sent(bid: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("UPDATE broadcasts SET sent_at=CURRENT_TIMESTAMP WHERE id=?", (bid,))
+        await db.commit()
+
+async def delete_broadcast(bid: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("DELETE FROM broadcasts WHERE id=?", (bid,))
+        await db.commit()
+
+# ---------- Совместимость со «старыми» именами ----------
+# Треки
+create_track   = add_track
+delete_track   = remove_track
+
+# Рассылки
+broadcasts_all      = list_broadcasts
+broadcast_create    = create_broadcast
+broadcast_add_media = add_broadcast_media
+broadcast_media     = get_broadcast_media
+broadcast_mark_sent = mark_broadcast_sent
+broadcast_delete    = delete_broadcast
