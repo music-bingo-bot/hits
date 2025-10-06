@@ -1,3 +1,4 @@
+# main.py
 import asyncio, os, random, traceback, logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from db import (
 )
 import messages as MSG
 from admin_web import create_app
+
 
 # ---------- ENV ----------
 load_dotenv()
@@ -48,12 +50,14 @@ bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
 dp = Dispatcher()
 app: FastAPI = create_app(bot)
 
-@app.api_route("/health", methods=["GET","HEAD"])
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def _health_edge():
     return PlainTextResponse("ok")
+
 @app.get("/healthz")
 async def _healthz():
     return PlainTextResponse("ok")
+
 
 # ---------- utils ----------
 async def safe_send_text(method, *args, **kwargs):
@@ -63,31 +67,37 @@ async def safe_send_text(method, *args, **kwargs):
         kwargs.pop("parse_mode", None)
         return await method(*args, parse_mode=None, **kwargs)
 
+
 @dataclass
 class GameState:
     order_ids: List[int]
     idx: int
+
 games: Dict[int, GameState] = {}
+
 
 # ---------- keyboards ----------
 def kb_main():
     kb = InlineKeyboardBuilder()
     kb.button(text=MSG.get("BUTTON_START"), callback_data="game:start")
     kb.button(text=MSG.get("BUTTON_HELP"),  callback_data="game:help")
-    kb.adjust(2); return kb.as_markup()
+    kb.adjust(2)
+    return kb.as_markup()
 
 def kb_track_full():
     kb = InlineKeyboardBuilder()
     kb.button(text=MSG.get("BUTTON_HINT"),   callback_data="game:hint")
     kb.button(text=MSG.get("BUTTON_ANSWER"), callback_data="game:answer")
     kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
-    kb.adjust(2,1); return kb.as_markup()
+    kb.adjust(2, 1)
+    return kb.as_markup()
 
 def kb_after_hint():
     kb = InlineKeyboardBuilder()
     kb.button(text=MSG.get("BUTTON_ANSWER"), callback_data="game:answer")
     kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
-    kb.adjust(2); return kb.as_markup()
+    kb.adjust(2)
+    return kb.as_markup()
 
 def kb_after_answer():
     kb = InlineKeyboardBuilder()
@@ -98,6 +108,7 @@ def kb_restart():
     kb = InlineKeyboardBuilder()
     kb.button(text="🔁 Сыграть ещё раз", callback_data="game:restart")
     return kb.as_markup()
+
 
 # ---------- handlers ----------
 @dp.message(CommandStart())
@@ -120,9 +131,9 @@ async def admin_cmd(m: Message):
         await safe_send_text(m.answer, MSG.get("NEED_ADMIN")); return
     await safe_send_text(m.answer, MSG.get("ADMIN_MENU"))
 
-def _public_host()->str:
-    for key in ("PUBLIC_URL","RAILWAY_PUBLIC_DOMAIN","REPLIT_WEB_URL"):
-        val = os.getenv(key,"").strip()
+def _public_host() -> str:
+    for key in ("PUBLIC_URL", "RAILWAY_PUBLIC_DOMAIN", "REPLIT_WEB_URL"):
+        val = os.getenv(key, "").strip()
         if val:
             return val if val.startswith("http") else f"https://{val}"
     return "https://example.com"
@@ -148,8 +159,11 @@ async def cb_help(c: CallbackQuery):
 @dp.callback_query(F.data == "game:start")
 async def cb_start(c: CallbackQuery):
     tracks = await get_all_tracks()
-    if len(tracks) < max(MIN_TRACKS,1):
-        await safe_send_text(c.message.answer, f"⚠️ В плейлисте {len(tracks)} трек(ов). Нужно ≥ {max(MIN_TRACKS,1)}. Загрузите через /admin_web.")
+    if len(tracks) < max(MIN_TRACKS, 1):
+        await safe_send_text(
+            c.message.answer,
+            f"⚠️ В плейлисте {len(tracks)} трек(ов). Нужно ≥ {max(MIN_TRACKS,1)}. Загрузите через /admin_web."
+        )
         await c.answer(); return
     order_ids = [t[0] for t in tracks]
     random.shuffle(order_ids)
@@ -158,7 +172,7 @@ async def cb_start(c: CallbackQuery):
     await send_current_track(c.message.chat.id)
     await c.answer()
 
-async def send_current_track(chat_id:int):
+async def send_current_track(chat_id: int):
     state = games.get(chat_id)
     if not state:
         return
@@ -168,10 +182,10 @@ async def send_current_track(chat_id:int):
 
     _id, _title, _hint_img, file_field = row
     total = len(state.order_ids)
-    caption = MSG.get("TRACK_X_OF_Y", i=state.idx+1, total=total)
+    caption = MSG.get("TRACK_X_OF_Y", i=state.idx + 1, total=total)
 
     width = len(str(total))
-    seq_title = f"Музыкальное бинго — {state.idx+1:0{width}d}.mp3"
+    seq_title = f"Музыкальное бинго — {state.idx + 1:0{width}d}.mp3"
 
     try:
         if file_field and file_field.startswith("uploads/") and os.path.exists(file_field):
@@ -180,7 +194,6 @@ async def send_current_track(chat_id:int):
                 audio=FSInputFile(file_field),
                 caption=caption,
                 title=seq_title,
-                performer="Музыкальное бинго",
                 reply_markup=kb_track_full()
             )
         else:
@@ -189,7 +202,6 @@ async def send_current_track(chat_id:int):
                 audio=file_field,
                 caption=caption,
                 title=seq_title,
-                performer="Музыкальное бинго",
                 reply_markup=kb_track_full()
             )
     except TelegramBadRequest:
@@ -202,6 +214,7 @@ async def cb_hint(c: CallbackQuery):
     row = await get_track_by_id(state.order_ids[state.idx])
     if not row: return await c.answer()
     _id, _title, hint_image, _file = row
+    # отправляем только картинку без подписи, сразу с кнопками
     if hint_image and hint_image.startswith("uploads/") and os.path.exists(hint_image):
         await c.message.answer_photo(FSInputFile(hint_image), reply_markup=kb_after_hint())
     else:
@@ -222,7 +235,7 @@ async def cb_answer(c: CallbackQuery):
 async def cb_next(c: CallbackQuery):
     state = games.get(c.message.chat.id)
     if not state: return await c.answer()
-    if state.idx < len(state.order_ids)-1:
+    if state.idx < len(state.order_ids) - 1:
         state.idx += 1
         await send_current_track(c.message.chat.id)
     else:
@@ -232,25 +245,31 @@ async def cb_next(c: CallbackQuery):
 @dp.callback_query(F.data == "game:restart")
 async def cb_restart(c: CallbackQuery):
     tracks = await get_all_tracks()
-    if len(tracks) < max(MIN_TRACKS,1):
+    if len(tracks) < max(MIN_TRACKS, 1):
         await safe_send_text(c.message.answer, f"⚠️ В плейлисте {len(tracks)} трек(ов). Нужно ≥ {max(MIN_TRACKS,1)}.")
         return await c.answer()
-    order_ids = [t[0] for t in tracks]; random.shuffle(order_ids)
+    order_ids = [t[0] for t in tracks]
+    random.shuffle(order_ids)
     games[c.message.chat.id] = GameState(order_ids=order_ids, idx=0)
-    await safe_send_text(c.message.answer, "Погнали ещё! 🎵"); await send_current_track(c.message.chat.id); await c.answer()
+    await safe_send_text(c.message.answer, "Погнали ещё! 🎵")
+    await send_current_track(c.message.chat.id)
+    await c.answer()
+
 
 # ---------- keepalive ----------
 async def keepalive():
     import aiohttp, asyncio as aio
-    host = next((os.getenv(k,"").strip() for k in ("PUBLIC_URL","RAILWAY_PUBLIC_DOMAIN","REPLIT_WEB_URL") if os.getenv(k)), "")
+    host = next((os.getenv(k, "").strip() for k in ("PUBLIC_URL", "RAILWAY_PUBLIC_DOMAIN", "REPLIT_WEB_URL") if os.getenv(k)), "")
     if not host: return
     url = (host if host.startswith("http") else f"https://{host}").rstrip("/") + "/healthz"
     while True:
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(url, timeout=10): pass
-        except Exception: pass
+        except Exception:
+            pass
         await aio.sleep(240)
+
 
 # ---------- run ----------
 async def run_bot():
@@ -258,13 +277,18 @@ async def run_bot():
     delay = 1
     while True:
         try:
-            await dp.start_polling(bot); break
+            logger.info("[polling] start")
+            await dp.start_polling(bot)
+            logger.info("[polling] finished normally")
+            break
         except Exception as e:
-            logging.exception("[polling] crashed: %r", e)
-            await asyncio.sleep(delay); delay = min(delay*2, 60)
+            logger.error(f"[polling] crashed: {repr(e)}")
+            traceback.print_exc()
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60)
 
 async def run_web():
-    port = int(os.getenv("PORT","8080"))
+    port = int(os.getenv("PORT", "8080"))
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info"))
     await server.serve()
 
