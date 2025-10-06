@@ -1,5 +1,6 @@
 # admin_web.py
 import os
+import subprocess
 from typing import List, Optional
 
 from fastapi import FastAPI, Request, UploadFile, Form, File
@@ -25,11 +26,30 @@ from db import (
 TEMPLATES = Jinja2Templates(directory="templates")
 
 
+def _strip_id3_inplace(mp3_path: str) -> None:
+    """
+    Удаляет все ID3/метаданные из MP3 без перекодирования.
+    Требует ffmpeg (он у нас уже ставится в Dockerfile).
+    """
+    try:
+        tmp = mp3_path + ".tmp"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", mp3_path, "-map_metadata", "-1", "-c", "copy", tmp],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        os.replace(tmp, mp3_path)
+    except Exception as e:
+        # если что-то пошло не так — просто логируем и продолжаем с исходным файлом
+        print(f"[admin_web] strip_id3 failed for {mp3_path}: {e}")
+
+
 def create_app(bot):
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret"))
 
-    # отдаём /uploads как статику (аудио/картинки)
+    # раздаём /uploads как статику (аудио/картинки)
     os.makedirs("uploads", exist_ok=True)
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -52,22 +72,16 @@ def create_app(bot):
     @app.post("/admin_web/login", response_class=HTMLResponse)
     async def login_post(request: Request, password: str = Form("")):
         ok = False
-        # 1) одноразовый токен ?key=...
         token = request.query_params.get("key")
         if token:
             user_id = await consume_admin_token(token)
             ok = user_id is not None
-        # 2) пароль = SESSION_SECRET
         if not ok and password and password == os.getenv("SESSION_SECRET", ""):
             ok = True
-
         if ok:
             request.session["adm_ok"] = True
             return RedirectResponse("/admin_web", status_code=302)
-        return TEMPLATES.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "Неверный токен или пароль"},
-        )
+        return TEMPLATES.TemplateResponse("login.html", {"request": request, "error": "Неверный токен или пароль"})
 
     @app.get("/admin_web/logout")
     async def logout(request: Request):
@@ -94,11 +108,10 @@ def create_app(bot):
         if guard:
             return guard
 
-        # следующий порядковый номер по текущему списку
         items = await get_all_tracks()
         seq = len(items) + 1
 
-        # ВНИМАНИЕ: длинное тире в имени файла
+        # длинное тире — обязательно
         seq_name = f"Музыкальное бинго — {seq:02d}.mp3"
 
         audio_path = None
@@ -108,6 +121,7 @@ def create_app(bot):
             async with aiofiles.open(audio_path, "wb") as f:
                 while chunk := await audio.read(64 * 1024):
                     await f.write(chunk)
+            _strip_id3_inplace(audio_path)
 
         hint_path = None
         if hint and hint.filename:
@@ -118,7 +132,6 @@ def create_app(bot):
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
 
-        # сохраняем в БД в порядке (title, HINT, AUDIO)
         await create_track(title or f"Хит #{seq:02d}", hint_path or "", audio_path or "")
         return RedirectResponse("/admin_web", status_code=302)
 
@@ -142,29 +155,33 @@ def create_app(bot):
         if guard:
             return guard
 
-        # текущее состояние строки, чтобы не затирать значение, если поле не пришло
-        current = await get_track_by_id(track_id)  # (id, film_title, hint, file_id)
-        current_hint = current[2] if current else ""
-        # обновляем название сразу (даже если пустое — можно поправить ещё раз)
-        await update_track(track_id, title or (current[1] if current else ""), current_hint)
+        current = await get_track_by_id(track_id)  # (id, title, hint, file_id)
+        cur_title = (current[1] if current else "")
+        cur_hint = (current[2] if current else "")
 
-        # заменить картинку-подсказку
+        # обновим название (если пустое — оставим старое)
+        new_title = title or cur_title
+
+        # заменяем подсказку
+        new_hint = cur_hint
         if hint and hint.filename:
             os.makedirs("uploads/hints", exist_ok=True)
             ext = os.path.splitext(hint.filename)[1] or ".jpg"
-            hint_path = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
-            async with aiofiles.open(hint_path, "wb") as f:
+            new_hint = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
+            async with aiofiles.open(new_hint, "wb") as f:
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
-            await update_track(track_id, title or (current[1] if current else ""), hint_path)
 
-        # заменить аудио (имя строго по плейлисту)
+        await update_track(track_id, new_title, new_hint)
+
+        # заменяем аудио
         if audio and audio.filename:
             os.makedirs("uploads/audio", exist_ok=True)
             audio_path = os.path.join("uploads", "audio", f"Музыкальное бинго — {track_id:02d}.mp3")
             async with aiofiles.open(audio_path, "wb") as f:
                 while chunk := await audio.read(64 * 1024):
                     await f.write(chunk)
+            _strip_id3_inplace(audio_path)
             await update_track_file(track_id, audio_path)
 
         return RedirectResponse("/admin_web", status_code=302)
@@ -213,8 +230,7 @@ def create_app(bot):
             for up in lst or []:
                 if not up or not up.filename:
                     continue
-                safe_name = up.filename
-                path = os.path.join("uploads", "broadcasts", safe_name)
+                path = os.path.join("uploads", "broadcasts", up.filename)
                 async with aiofiles.open(path, "wb") as f:
                     while chunk := await up.read(64 * 1024):
                         await f.write(chunk)
@@ -258,7 +274,6 @@ def create_app(bot):
             nonlocal sent, failed
             try:
                 n = len(media_rows)
-
                 if n >= 2:
                     album = []
                     for kind, path in media_rows[:10]:
@@ -271,7 +286,6 @@ def create_app(bot):
                     if body_txt:
                         album[0].caption = body_txt
                     await bot.send_media_group(uid, album)
-
                 elif n == 1:
                     kind, path = media_rows[0]
                     file = FSInputFile(path)
@@ -281,10 +295,8 @@ def create_app(bot):
                         await bot.send_video(uid, file, caption=body_txt or None)
                     else:
                         await bot.send_document(uid, file, caption=body_txt or None)
-
                 elif body_txt:
                     await bot.send_message(uid, body_txt)
-
                 sent += 1
             except Exception as e:
                 failed += 1
