@@ -51,7 +51,6 @@ app: FastAPI = create_app(bot)
 @app.api_route("/health", methods=["GET","HEAD"])
 async def _health_edge():
     return PlainTextResponse("ok")
-
 @app.get("/healthz")
 async def _healthz():
     return PlainTextResponse("ok")
@@ -68,7 +67,6 @@ async def safe_send_text(method, *args, **kwargs):
 class GameState:
     order_ids: List[int]
     idx: int
-
 games: Dict[int, GameState] = {}
 
 # ---------- keyboards ----------
@@ -76,27 +74,24 @@ def kb_main():
     kb = InlineKeyboardBuilder()
     kb.button(text=MSG.get("BUTTON_START"), callback_data="game:start")
     kb.button(text=MSG.get("BUTTON_HELP"),  callback_data="game:help")
-    kb.adjust(2)
-    return kb.as_markup()
+    kb.adjust(2); return kb.as_markup()
 
 def kb_track_full():
     kb = InlineKeyboardBuilder()
     kb.button(text=MSG.get("BUTTON_HINT"),   callback_data="game:hint")
     kb.button(text=MSG.get("BUTTON_ANSWER"), callback_data="game:answer")
     kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
-    kb.adjust(2,1)
-    return kb.as_markup()
+    kb.adjust(2,1); return kb.as_markup()
 
 def kb_after_hint():
     kb = InlineKeyboardBuilder()
     kb.button(text=MSG.get("BUTTON_ANSWER"), callback_data="game:answer")
     kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
-    kb.adjust(2)
-    return kb.as_markup()
+    kb.adjust(2); return kb.as_markup()
 
 def kb_after_answer():
     kb = InlineKeyboardBuilder()
-    kb.button(text=MSG.get("BUTTON_NEXT"), callback_data="game:next")
+    kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
     return kb.as_markup()
 
 def kb_restart():
@@ -167,17 +162,16 @@ async def send_current_track(chat_id:int):
     state = games.get(chat_id)
     if not state:
         return
-
     row = await get_track_by_id(state.order_ids[state.idx])
     if not row:
         await bot.send_message(chat_id, "❌ Трек не найден."); return
 
-    _id, _title_from_db, _hint_image, file_field = row
+    _id, _title, _hint_img, file_field = row
+    total = len(state.order_ids)
+    caption = MSG.get("TRACK_X_OF_Y", i=state.idx+1, total=total)
 
-    # только «Музыкальное бинго — NN.mp3»
-    width = len(str(len(state.order_ids)))
+    width = len(str(total))
     seq_title = f"Музыкальное бинго — {state.idx+1:0{width}d}.mp3"
-    caption = MSG.get("TRACK_X_OF_Y", i=state.idx+1, total=len(state.order_ids))
 
     try:
         if file_field and file_field.startswith("uploads/") and os.path.exists(file_field):
@@ -186,7 +180,7 @@ async def send_current_track(chat_id:int):
                 audio=FSInputFile(file_field),
                 caption=caption,
                 title=seq_title,
-                performer="",                  # ← без артиста слева
+                performer="Музыкальное бинго",
                 reply_markup=kb_track_full()
             )
         else:
@@ -195,11 +189,11 @@ async def send_current_track(chat_id:int):
                 audio=file_field,
                 caption=caption,
                 title=seq_title,
-                performer="",                  # ← без артиста слева
+                performer="Музыкальное бинго",
                 reply_markup=kb_track_full()
             )
     except TelegramBadRequest:
-        await bot.send_message(chat_id, "❌ Не удалось отправить аудио. Проверь файл/file_id.")
+        await bot.send_message(chat_id, "Не удалось отправить аудио. Проверь файл/file_id.")
 
 @dp.callback_query(F.data == "game:hint")
 async def cb_hint(c: CallbackQuery):
@@ -208,15 +202,11 @@ async def cb_hint(c: CallbackQuery):
     row = await get_track_by_id(state.order_ids[state.idx])
     if not row: return await c.answer()
     _id, _title, hint_image, _file = row
-
-    # Только фото + клавиатура (без текста)
-    try:
-        if hint_image and hint_image.startswith("uploads/") and os.path.exists(hint_image):
-            await c.message.answer_photo(FSInputFile(hint_image), reply_markup=kb_after_hint())
-        else:
-            await c.message.answer(MSG.get("NO_HINT"), reply_markup=kb_after_hint())
-    finally:
-        await c.answer()
+    if hint_image and hint_image.startswith("uploads/") and os.path.exists(hint_image):
+        await c.message.answer_photo(FSInputFile(hint_image), reply_markup=kb_after_hint())
+    else:
+        await c.message.answer_photo(hint_image, reply_markup=kb_after_hint()) if hint_image else await c.message.answer("Подсказка недоступна.")
+    await c.answer()
 
 @dp.callback_query(F.data == "game:answer")
 async def cb_answer(c: CallbackQuery):
@@ -225,7 +215,7 @@ async def cb_answer(c: CallbackQuery):
     row = await get_track_by_id(state.order_ids[state.idx])
     if not row: return await c.answer()
     _id, title, _hint, _file = row
-    await safe_send_text(c.message.answer, f"{MSG.get('ANSWER_PREFIX')} *{title}*", reply_markup=kb_after_answer())
+    await safe_send_text(c.message.answer, f"{MSG.get('ANSWER_PREFIX')} {title}", reply_markup=kb_after_answer())
     await c.answer()
 
 @dp.callback_query(F.data == "game:next")
