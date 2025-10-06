@@ -53,7 +53,7 @@ logger = logging.getLogger("hits-bot")
 
 
 # ---------- BOT / WEB ----------
-bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 app: FastAPI = create_app(bot)
 
