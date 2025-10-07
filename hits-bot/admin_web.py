@@ -1,9 +1,16 @@
 # admin_web.py
 import os
+import tempfile
+import zipfile
 from typing import List, Optional
 
 from fastapi import FastAPI, Request, UploadFile, Form
-from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+    PlainTextResponse,
+    FileResponse,
+)
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -11,12 +18,20 @@ import aiofiles
 
 # для рассылок и треков
 from db import (
-    get_all_tracks, get_track_by_id,
-    create_track, update_track, delete_track,          # алиасы совместимости
+    get_all_tracks,
+    get_track_by_id,
+    create_track,
+    update_track,
+    delete_track,  # алиасы совместимости
     update_track_file,
-    create_admin_token, consume_admin_token,
-    broadcasts_all, broadcast_create, broadcast_add_media,
-    broadcast_media, broadcast_delete, broadcast_mark_sent,
+    create_admin_token,
+    consume_admin_token,
+    broadcasts_all,
+    broadcast_create,
+    broadcast_add_media,
+    broadcast_media,
+    broadcast_delete,
+    broadcast_mark_sent,
     get_all_user_ids,
 )
 
@@ -27,7 +42,7 @@ TEMPLATES = Jinja2Templates(directory="templates")
 def _strip_id3_safe(path: str) -> None:
     """
     Удаляем ID3-теги, чтобы Telegram не подставлял 'Исполнитель – Название' из метаданных.
-    Работает «мягко»: если файла/библиотеки нет — просто пропускаем.
+    Если библиотека/файл недоступны — тихо пропускаем.
     """
     try:
         from mutagen import File
@@ -36,17 +51,14 @@ def _strip_id3_safe(path: str) -> None:
             return
         try:
             tags = ID3(path)
-            # полностью сносим теги
             tags.delete(path)
         except ID3NoHeaderError:
-            pass  # тегов и так нет
-        # На всякий случай обрабатываем другие контейнеры
+            pass
         mf = File(path)
         if mf is not None and mf.tags is not None:
-            mf.delete()  # некоторые контейнеры поддерживают delete()
+            mf.delete()
             mf.save()
     except Exception:
-        # не валим загрузку, если что-то пошло не так
         pass
 
 
@@ -54,7 +66,7 @@ def create_app(bot):
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret"))
 
-    # раздача /uploads (аудио/картинки) как статики
+    # раздача /uploads (аудио/картинки/БД) как статики
     os.makedirs("uploads", exist_ok=True)
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -100,7 +112,8 @@ def create_app(bot):
     @app.get("/admin_web", response_class=HTMLResponse)
     async def tracks_page(request: Request):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
         items = await get_all_tracks()
         return TEMPLATES.TemplateResponse("tracks.html", {"request": request, "items": items})
 
@@ -112,7 +125,8 @@ def create_app(bot):
         hint: Optional[UploadFile] = None,
     ):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
 
         # следующий номер
         items = await get_all_tracks()
@@ -128,7 +142,6 @@ def create_app(bot):
             async with aiofiles.open(audio_path, "wb") as f:
                 while chunk := await audio.read(64 * 1024):
                     await f.write(chunk)
-            # удаляем ID3
             _strip_id3_safe(audio_path)
 
         hint_path = None
@@ -147,19 +160,22 @@ def create_app(bot):
     @app.get("/admin_web/edit/{track_id}", response_class=HTMLResponse)
     async def edit_track_page(request: Request, track_id: int):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
         row = await get_track_by_id(track_id)
         return TEMPLATES.TemplateResponse("edit_track.html", {"request": request, "row": row})
 
     @app.post("/admin_web/edit/{track_id}")
     async def edit_track_post(
-        request: Request, track_id: int,
+        request: Request,
+        track_id: int,
         title: str = Form(""),
         audio: Optional[UploadFile] = None,
         hint: Optional[UploadFile] = None,
     ):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
 
         # заменить картинку-подсказку
         hint_path = None
@@ -183,7 +199,6 @@ def create_app(bot):
 
         # обновляем БД
         if title or hint_path is not None:
-            # если подсказку не меняли — оставляем прежний путь
             old = await get_track_by_id(track_id)
             new_hint = hint_path if hint_path is not None else (old[2] if old else "")
             await update_track(track_id, title or (old[1] if old else ""), new_hint)
@@ -195,22 +210,91 @@ def create_app(bot):
     @app.post("/admin_web/delete/{track_id}")
     async def delete_track_post(request: Request, track_id: int):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
         await delete_track(track_id)
         return RedirectResponse("/admin_web", status_code=302)
+
+    # ---------- BACKUP / RESTORE ----------
+    @app.get("/admin_web/backup")
+    async def backup_download(request: Request):
+        guard = _need_auth(request)
+        if guard:
+            return guard
+
+        # собираем zip во временный файл
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+        tmp.close()
+        zip_path = tmp.name
+
+        base = "uploads"
+        os.makedirs(base, exist_ok=True)
+
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            # если папки ещё пустые — zip всё равно создастся
+            if os.path.isdir(base):
+                for root, _dirs, files in os.walk(base):
+                    for name in files:
+                        full = os.path.join(root, name)
+                        # arcname — относительный путь внутри архива
+                        arc = os.path.relpath(full, start=os.path.dirname(base))
+                        zf.write(full, arcname=arc)
+
+        # отдадим файл и удалим его после отдачи
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename="backup_uploads.zip",
+        )
+
+    @app.post("/admin_web/restore")
+    async def backup_restore(request: Request, archive: UploadFile):
+        guard = _need_auth(request)
+        if guard:
+            return guard
+
+        if not archive or not archive.filename:
+            return RedirectResponse("/admin_web?restore=missing", status_code=302)
+
+        # сохраняем загруженный zip на диск
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+        async with aiofiles.open(tmp.name, "wb") as f:
+            while chunk := await archive.read(64 * 1024):
+                await f.write(chunk)
+
+        base = "uploads"
+        os.makedirs(base, exist_ok=True)
+
+        # распаковываем поверх (перезаписывает файлы)
+        with zipfile.ZipFile(tmp.name, "r") as zf:
+            # безопасность по-минимуму: оставляем только пути внутри uploads/
+            for member in zf.infolist():
+                target = os.path.normpath(os.path.join(".", member.filename))
+                if not target.startswith(("uploads", "./uploads")):
+                    continue
+                zf.extract(member, ".")
+
+        try:
+            os.remove(tmp.name)
+        except Exception:
+            pass
+
+        return RedirectResponse("/admin_web?restore=ok", status_code=302)
 
     # ---------- broadcasts ----------
     @app.get("/admin_web/broadcasts", response_class=HTMLResponse)
     async def broadcasts_list(request: Request):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
         items = await broadcasts_all()
         return TEMPLATES.TemplateResponse("broadcasts_list.html", {"request": request, "items": items})
 
     @app.get("/admin_web/broadcasts/new", response_class=HTMLResponse)
     async def broadcasts_new(request: Request):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
         return TEMPLATES.TemplateResponse("broadcasts_new.html", {"request": request})
 
     @app.post("/admin_web/broadcasts/preview", response_class=HTMLResponse)
@@ -220,10 +304,11 @@ def create_app(bot):
         text: str = Form(""),
         images: List[UploadFile] = Form([]),
         videos: List[UploadFile] = Form([]),
-        files:  List[UploadFile] = Form([]),
+        files: List[UploadFile] = Form([]),
     ):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
 
         bid = await broadcast_create(title, text)
         os.makedirs("uploads/broadcasts", exist_ok=True)
@@ -240,21 +325,23 @@ def create_app(bot):
 
         await _save_many(images, "image")
         await _save_many(videos, "video")
-        await _save_many(files,  "file")
+        await _save_many(files, "file")
 
         return RedirectResponse("/admin_web/broadcasts", status_code=302)
 
     @app.post("/admin_web/broadcasts/delete/{bid}")
     async def broadcasts_del(request: Request, bid: int):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
         await broadcast_delete(bid)
         return RedirectResponse("/admin_web/broadcasts", status_code=302)
 
     @app.post("/admin_web/broadcasts/send/{bid}")
     async def broadcasts_send(request: Request, bid: int):
         guard = _need_auth(request)
-        if guard: return guard
+        if guard:
+            return guard
 
         media = await broadcast_media(bid)
         title = None
