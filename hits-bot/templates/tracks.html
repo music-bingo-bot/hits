@@ -4,56 +4,18 @@
 <meta charset="UTF-8">
 <title>Треки — Лучшие хиты</title>
 <style>
- body {
-   font-family: Arial, sans-serif;
-   max-width: 1000px;
-   margin: 20px auto;
-   padding: 20px;
- }
- .header {
-   display: flex;
-   justify-content: space-between;
-   align-items: center;
-   margin-bottom: 20px;
- }
- .actions a, button {
-   margin-right: 8px;
-   padding: 8px 16px;
-   background: #007cba;
-   color: #fff;
-   text-decoration: none;
-   border: none;
-   border-radius: 4px;
-   cursor: pointer;
- }
- .actions a:hover, button:hover {
-   background: #005a85;
- }
- table {
-   width: 100%;
-   border-collapse: collapse;
-   margin-top: 20px;
- }
- th, td {
-   border: 1px solid #ddd;
-   padding: 10px;
-   text-align: left;
-   vertical-align: top;
- }
- th {
-   background: #f7f7f7;
- }
- input[type=text], input[type=file] {
-   width: 100%;
-   padding: 8px;
-   border: 1px solid #ccc;
-   border-radius: 4px;
-   box-sizing: border-box;
- }
- img.hint {
-   max-height: 60px;
-   border-radius: 6px;
- }
+ body { font-family: Arial, sans-serif; max-width: 1000px; margin: 20px auto; padding: 20px; }
+ .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+ .actions a, .actions button, .inline-form button { margin-right: 8px; padding: 8px 16px; background:#007cba; color:#fff; text-decoration:none; border:none; border-radius:4px; cursor:pointer; }
+ .actions a:hover, .actions button:hover, .inline-form button:hover { background:#005a85; }
+ table { width:100%; border-collapse:collapse; margin-top:20px; }
+ th, td { border:1px solid #ddd; padding:10px; text-align:left; vertical-align:top; }
+ th { background:#f7f7f7; }
+ input[type=text], input[type=file] { width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; }
+ img.hint { max-height:60px; border-radius:6px; }
+ .tools { margin: 10px 0 20px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+ .inline-form { display:inline-flex; align-items:center; gap:8px; }
+ .inline-form input[type=file] { width:auto; }
 </style>
 </head>
 <body>
@@ -65,23 +27,19 @@
   </div>
 </div>
 
+<div class="tools">
+  <a class="btn" href="/admin_web/backup">💾 Скачать бэкап</a>
+  <form class="inline-form" action="/admin_web/restore" method="post" enctype="multipart/form-data" onsubmit="return confirm('Перезаписать файлы в uploads и базу?');">
+    <input type="file" name="archive" accept=".zip" required>
+    <button>🔄 Восстановить из архива</button>
+  </form>
+</div>
+
 <h2>Добавить трек</h2>
 <form action="/admin_web/upload" method="post" enctype="multipart/form-data">
-  <p>
-    <label>Название хита<br>
-      <input type="text" name="title" placeholder="Напр. Michael Jackson — Billie Jean">
-    </label>
-  </p>
-  <p>
-    <label>MP3 (будет сохранён как «Музыкальное бинго — 01.mp3» и т.д.)<br>
-      <input type="file" name="audio" accept="audio/*" required>
-    </label>
-  </p>
-  <p>
-    <label>Картинка-подсказка<br>
-      <input type="file" name="hint" accept="image/*">
-    </label>
-  </p>
+  <p><label>Название хита<br><input type="text" name="title" placeholder="Напр. Michael Jackson — Billie Jean"></label></p>
+  <p><label>MP3 (будет сохранён как «Музыкальное бинго — 01.mp3» и т.д.)<br><input type="file" name="audio" accept="audio/*" required></label></p>
+  <p><label>Картинка-подсказка<br><input type="file" name="hint" accept="image/*"></label></p>
   <p><button>Загрузить</button></p>
 </form>
 
