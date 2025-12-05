@@ -22,7 +22,7 @@ from db import (
     get_track_by_id,
     create_track,
     update_track,
-    delete_track,          # алиасы совместимости
+    delete_track,  # алиас
     update_track_file,
     create_admin_token,
     consume_admin_token,
@@ -35,27 +35,29 @@ from db import (
     get_all_user_ids,
 )
 
-# ВАЖНО: у тебя шаблоны лежат в папке templates/templates,
-# поэтому указываем именно её.
-TEMPLATES = Jinja2Templates(directory="templates/templates")
+TEMPLATES = Jinja2Templates(directory="templates")
 
 
 # ---- утилита: зачистка ID3 у mp3 ----
 def _strip_id3_safe(path: str) -> None:
     """
-    Удаляем ID3-теги, чтобы Telegram не подставлял 'Исполнитель – Название'
-    из метаданных. Если библиотека/файл недоступны — тихо пропускаем.
+    Удаляем ID3-теги, чтобы Telegram не подставлял
+    «Исполнитель – Название» из метаданных.
+    Если библиотека/файл недоступны — тихо пропускаем.
     """
     try:
         from mutagen import File
         from mutagen.id3 import ID3, ID3NoHeaderError
+
         if not os.path.exists(path):
             return
+
         try:
             tags = ID3(path)
             tags.delete(path)
         except ID3NoHeaderError:
             pass
+
         mf = File(path)
         if mf is not None and mf.tags is not None:
             mf.delete()
@@ -84,7 +86,7 @@ def create_app(bot):
             return RedirectResponse("/admin_web/login", status_code=302)
 
     @app.get("/", response_class=HTMLResponse)
-    def _root(_: Request):
+    async def _root(_: Request):
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.get("/admin_web/login", response_class=HTMLResponse)
@@ -94,11 +96,13 @@ def create_app(bot):
     @app.post("/admin_web/login", response_class=HTMLResponse)
     async def login_post(request: Request, password: str = Form("")):
         ok = False
+
         # 1) одноразовый токен ?key=...
         token = request.query_params.get("key")
         if token:
             user_id = await consume_admin_token(token)
             ok = user_id is not None
+
         # 2) обычный пароль (SESSION_SECRET)
         if not ok and password and password == os.getenv("SESSION_SECRET", ""):
             ok = True
@@ -106,6 +110,7 @@ def create_app(bot):
         if ok:
             request.session["adm_ok"] = True
             return RedirectResponse("/admin_web", status_code=302)
+
         return TEMPLATES.TemplateResponse(
             "login.html",
             {"request": request, "error": "Неверный токен или пароль"},
@@ -164,7 +169,6 @@ def create_app(bot):
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
 
-        # сохраняем (title, HINT, AUDIO)
         await create_track(title or f"Хит #{seq:02d}", hint_path or "", audio_path or "")
         return RedirectResponse("/admin_web", status_code=302)
 
@@ -240,7 +244,6 @@ def create_app(bot):
         if guard:
             return guard
 
-        # собираем zip во временный файл
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
         tmp.close()
         zip_path = tmp.name
@@ -331,9 +334,9 @@ def create_app(bot):
         bid = await broadcast_create(title, text)
         os.makedirs("uploads/broadcasts", exist_ok=True)
 
-        async def _save_many(lst, kind):
+        async def _save_many(lst, kind: str):
             for up in lst or []:
-                if not up.filename:
+                if not up or not up.filename:
                     continue
                 path = os.path.join("uploads", "broadcasts", up.filename)
                 async with aiofiles.open(path, "wb") as f:
@@ -346,12 +349,9 @@ def create_app(bot):
         await _save_many(files, "file")
 
         media = await broadcast_media(bid)
-        imgs = [p for k, p in media if k == "image"]
-        vids = [p for k, p in media if k == "video"]
-        fils = [p for k, p in media if k == "file"]
-
-        # текст с переносами для предпросмотра
-        text_html = (text or "").replace("\n", "<br>")
+        imgs = [p for (k, p) in media if k == "image"]
+        vids = [p for (k, p) in media if k == "video"]
+        fils = [p for (k, p) in media if k == "file"]
 
         return TEMPLATES.TemplateResponse(
             "broadcasts_preview.html",
@@ -360,7 +360,6 @@ def create_app(bot):
                 "id": bid,
                 "title": title,
                 "text": text,
-                "text_html": text_html,
                 "images": imgs,
                 "videos": vids,
                 "files": fils,
@@ -392,16 +391,21 @@ def create_app(bot):
         sent = 0
         failed = 0
 
-        from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, InputMediaDocument
+        from aiogram.types import (
+            FSInputFile as TgFSInputFile,
+            InputMediaPhoto,
+            InputMediaVideo,
+            InputMediaDocument,
+        )
 
         album = []
         for kind, path in media[:10]:
             if kind == "image":
-                album.append(InputMediaPhoto(media=FSInputFile(path)))
+                album.append(InputMediaPhoto(media=TgFSInputFile(path)))
             elif kind == "video":
-                album.append(InputMediaVideo(media=FSInputFile(path)))
+                album.append(InputMediaVideo(media=TgFSInputFile(path)))
             else:
-                album.append(InputMediaDocument(media=FSInputFile(path)))
+                album.append(InputMediaDocument(media=TgFSInputFile(path)))
 
         for uid in uids:
             try:
