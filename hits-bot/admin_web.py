@@ -4,7 +4,7 @@ import tempfile
 import zipfile
 from typing import List, Optional
 
-from fastapi import FastAPI, Request, UploadFile, Form
+from fastapi import FastAPI, Request, UploadFile, Form, File
 from fastapi.responses import (
     HTMLResponse,
     RedirectResponse,
@@ -297,14 +297,15 @@ def create_app(bot):
             return guard
         return TEMPLATES.TemplateResponse("broadcasts_new.html", {"request": request})
 
+    # ----------- ПРЕДПРОСМОТР РАССЫЛКИ -----------
     @app.post("/admin_web/broadcasts/preview", response_class=HTMLResponse)
     async def broadcasts_preview(
         request: Request,
         title: str = Form(""),
         text: str = Form(""),
-        images: List[UploadFile] = Form([]),
-        videos: List[UploadFile] = Form([]),
-        files: List[UploadFile] = Form([]),
+        images: List[UploadFile] = File(default=[]),
+        videos: List[UploadFile] = File(default=[]),
+        files: List[UploadFile] = File(default=[]),
     ):
         guard = _need_auth(request)
         if guard:
@@ -327,7 +328,23 @@ def create_app(bot):
         await _save_many(videos, "video")
         await _save_many(files, "file")
 
-        return RedirectResponse("/admin_web/broadcasts", status_code=302)
+        media = await broadcast_media(bid)
+        imgs = [p for k, p in media if k == "image"]
+        vids = [p for k, p in media if k == "video"]
+        fils = [p for k, p in media if k == "file"]
+
+        return TEMPLATES.TemplateResponse(
+            "broadcasts_preview.html",
+            {
+                "request": request,
+                "id": bid,
+                "title": title,
+                "text": text,
+                "images": imgs,
+                "videos": vids,
+                "files": fils,
+            },
+        )
 
     @app.post("/admin_web/broadcasts/delete/{bid}")
     async def broadcasts_del(request: Request, bid: int):
