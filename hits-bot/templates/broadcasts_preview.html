@@ -1,97 +1,78 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <title>Предпросмотр рассылки</title>
-  <style>
-    body{font-family:Arial,sans-serif;max-width:1000px;margin:20px auto;padding:20px}
-    .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-    .actions a, .actions button{
-      margin-left:8px;padding:8px 16px;background:#007cba;color:#fff;
-      text-decoration:none;border:none;border-radius:4px;cursor:pointer
-    }
-    .actions a:hover, .actions button:hover{background:#005a85}
-    .block{margin-bottom:20px}
-    .label{font-weight:bold;margin-bottom:6px}
-    textarea{width:100%;min-height:140px;padding:10px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box}
-    .media-grid{display:flex;flex-wrap:wrap;gap:16px}
-    .media-item{max-width:260px}
-    .media-item img,.media-item video{max-width:100%;border-radius:6px}
-    .muted{color:#666;font-size:12px;margin-top:4px}
-    ul{padding-left:20px}
-  </style>
+<meta charset="UTF-8">
+<title>Предпросмотр рассылки</title>
+<style>
+  body{font-family:Arial,sans-serif;max-width:1000px;margin:20px auto;padding:20px}
+  .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+  .actions a, .actions button{
+    margin-left:8px;padding:8px 16px;background:#007cba;color:#fff;
+    text-decoration:none;border:none;border-radius:4px;cursor:pointer
+  }
+  .actions a:hover, .actions button:hover{background:#005a85}
+  .box{border:1px solid #ddd;border-radius:6px;padding:10px;margin:6px 0;white-space:pre-wrap}
+  h2{margin-top:24px}
+  .media-grid{display:flex;flex-wrap:wrap;gap:16px;margin-top:10px}
+  .media-item{border:1px solid #eee;border-radius:6px;padding:6px;font-size:14px}
+  video{max-width:260px;display:block}
+  img{max-width:260px;display:block}
+</style>
 </head>
 <body>
 <div class="header">
   <h1>📣 Предпросмотр рассылки</h1>
   <div class="actions">
-    <a href="/admin_web/broadcasts">К списку рассылок</a>
+    <a href="/admin_web/broadcasts">← К списку</a>
     <form method="post" action="/admin_web/broadcasts/send/{{ id }}" style="display:inline">
       <button type="submit">Отправить</button>
     </form>
   </div>
 </div>
 
-<div class="block">
-  <div class="label">ID:</div>
-  <div>{{ id }}</div>
-</div>
+<p><strong>ID:</strong> {{ id }}</p>
+<p><strong>Заголовок:</strong> {{ title or '—' }}</p>
 
-<div class="block">
-  <div class="label">Заголовок:</div>
-  <div>{{ title or "—" }}</div>
-</div>
+<h2>Текст</h2>
+<div class="box">{{ text_html|safe }}</div>
 
-<div class="block">
-  <div class="label">Текст:</div>
-  <textarea readonly>{{ text }}</textarea>
-</div>
-
-<div class="block">
-  <div class="label">Картинки ({{ images|length }}):</div>
-  {% if images %}
-    <div class="media-grid">
-      {% for img in images %}
-      <div class="media-item">
-        <img src="/{{ img }}" alt="">
-        <div class="muted">{{ img }}</div>
-      </div>
-      {% endfor %}
+<h2>Картинки ({{ images|length }})</h2>
+{% if images %}
+<div class="media-grid">
+  {% for img in images %}
+    <div class="media-item">
+      <img src="/{{ img }}" alt="image">
+      <div>{{ img }}</div>
     </div>
-  {% else %}
-    <div>Нет картинок</div>
-  {% endif %}
+  {% endfor %}
 </div>
+{% else %}
+<p>Нет картинок</p>
+{% endif %}
 
-<div class="block">
-  <div class="label">Видео ({{ videos|length }}):</div>
-  {% if videos %}
-    <div class="media-grid">
-      {% for v in videos %}
-      <div class="media-item">
-        <video controls>
-          <source src="/{{ v }}">
-        </video>
-        <div class="muted">{{ v }}</div>
-      </div>
-      {% endfor %}
+<h2>Видео ({{ videos|length }})</h2>
+{% if videos %}
+<div class="media-grid">
+  {% for vid in videos %}
+    <div class="media-item">
+      <video src="/{{ vid }}" controls></video>
+      <div>{{ vid }}</div>
     </div>
-  {% else %}
-    <div>Нет видео</div>
-  {% endif %}
+  {% endfor %}
 </div>
+{% else %}
+<p>Нет видео</p>
+{% endif %}
 
-<div class="block">
-  <div class="label">Файлы ({{ files|length }}):</div>
-  {% if files %}
-    <ul>
-      {% for f in files %}
-      <li><a href="/{{ f }}" target="_blank">{{ f }}</a></li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <div>Нет файлов</div>
-  {% endif %}
-</div>
+<h2>Файлы ({{ files|length }})</h2>
+{% if files %}
+<ul>
+  {% for f in files %}
+    <li><a href="/{{ f }}" target="_blank">{{ f }}</a></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>Нет файлов</p>
+{% endif %}
 </body>
 </html>
