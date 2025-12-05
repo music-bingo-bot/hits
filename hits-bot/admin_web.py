@@ -47,6 +47,7 @@ def _strip_id3_safe(path: str) -> None:
     try:
         from mutagen import File
         from mutagen.id3 import ID3, ID3NoHeaderError
+
         if not os.path.exists(path):
             return
         try:
@@ -64,7 +65,9 @@ def _strip_id3_safe(path: str) -> None:
 
 def create_app(bot):
     app = FastAPI()
-    app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret"))
+    app.add_middleware(
+        SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret")
+    )
 
     # раздача /uploads (аудио/картинки/БД) как статики
     os.makedirs("uploads", exist_ok=True)
@@ -101,7 +104,10 @@ def create_app(bot):
         if ok:
             request.session["adm_ok"] = True
             return RedirectResponse("/admin_web", status_code=302)
-        return TEMPLATES.TemplateResponse("login.html", {"request": request, "error": "Неверный токен или пароль"})
+        return TEMPLATES.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Неверный токен или пароль"},
+        )
 
     @app.get("/admin_web/logout")
     async def logout(request: Request):
@@ -115,7 +121,9 @@ def create_app(bot):
         if guard:
             return guard
         items = await get_all_tracks()
-        return TEMPLATES.TemplateResponse("tracks.html", {"request": request, "items": items})
+        return TEMPLATES.TemplateResponse(
+            "tracks.html", {"request": request, "items": items}
+        )
 
     @app.post("/admin_web/upload")
     async def upload_track(
@@ -154,7 +162,9 @@ def create_app(bot):
                     await f.write(chunk)
 
         # сохраняем (title, HINT, AUDIO)
-        await create_track(title or f"Хит #{seq:02d}", hint_path or "", audio_path or "")
+        await create_track(
+            title or f"Хит #{seq:02d}", hint_path or "", audio_path or ""
+        )
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.get("/admin_web/edit/{track_id}", response_class=HTMLResponse)
@@ -163,7 +173,9 @@ def create_app(bot):
         if guard:
             return guard
         row = await get_track_by_id(track_id)
-        return TEMPLATES.TemplateResponse("edit_track.html", {"request": request, "row": row})
+        return TEMPLATES.TemplateResponse(
+            "edit_track.html", {"request": request, "row": row}
+        )
 
     @app.post("/admin_web/edit/{track_id}")
     async def edit_track_post(
@@ -182,7 +194,9 @@ def create_app(bot):
         if hint and hint.filename:
             os.makedirs("uploads/hints", exist_ok=True)
             ext = os.path.splitext(hint.filename)[1] or ".jpg"
-            hint_path = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
+            hint_path = os.path.join(
+                "uploads", "hints", f"hint_{track_id:02d}{ext}"
+            )
             async with aiofiles.open(hint_path, "wb") as f:
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
@@ -191,7 +205,9 @@ def create_app(bot):
         audio_path = None
         if audio and audio.filename:
             os.makedirs("uploads/audio", exist_ok=True)
-            audio_path = os.path.join("uploads", "audio", f"Музыкальное бинго — {track_id:02d}.mp3")
+            audio_path = os.path.join(
+                "uploads", "audio", f"Музыкальное бинго — {track_id:02d}.mp3"
+            )
             async with aiofiles.open(audio_path, "wb") as f:
                 while chunk := await audio.read(64 * 1024):
                     await f.write(chunk)
@@ -240,7 +256,7 @@ def create_app(bot):
                         arc = os.path.relpath(full, start=os.path.dirname(base))
                         zf.write(full, arcname=arc)
 
-        # отдадим файл и удалим его после отдачи
+        # отдадим файл
         return FileResponse(
             zip_path,
             media_type="application/zip",
@@ -288,16 +304,19 @@ def create_app(bot):
         if guard:
             return guard
         items = await broadcasts_all()
-        return TEMPLATES.TemplateResponse("broadcasts_list.html", {"request": request, "items": items})
+        return TEMPLATES.TemplateResponse(
+            "broadcasts_list.html", {"request": request, "items": items}
+        )
 
     @app.get("/admin_web/broadcasts/new", response_class=HTMLResponse)
     async def broadcasts_new(request: Request):
         guard = _need_auth(request)
         if guard:
             return guard
-        return TEMPLATES.TemplateResponse("broadcasts_new.html", {"request": request})
+        return TEMPLATES.TemplateResponse(
+            "broadcasts_new.html", {"request": request}
+        )
 
-    # ----------- ПРЕДПРОСМОТР РАССЫЛКИ -----------
     @app.post("/admin_web/broadcasts/preview", response_class=HTMLResponse)
     async def broadcasts_preview(
         request: Request,
@@ -314,9 +333,9 @@ def create_app(bot):
         bid = await broadcast_create(title, text)
         os.makedirs("uploads/broadcasts", exist_ok=True)
 
-        async def _save_many(lst, kind):
+        async def _save_many(lst, kind: str):
             for up in lst or []:
-                if not up.filename:
+                if not up or not up.filename:
                     continue
                 path = os.path.join("uploads", "broadcasts", up.filename)
                 async with aiofiles.open(path, "wb") as f:
@@ -371,7 +390,12 @@ def create_app(bot):
         sent = 0
         failed = 0
 
-        from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, InputMediaDocument
+        from aiogram.types import (
+            FSInputFile,
+            InputMediaPhoto,
+            InputMediaVideo,
+            InputMediaDocument,
+        )
 
         album = []
         for kind, path in media[:10]:
@@ -395,7 +419,10 @@ def create_app(bot):
                 failed += 1
 
         await broadcast_mark_sent(bid)
-        return RedirectResponse(f"/admin_web/broadcasts?sent={sent}&failed={failed}", status_code=302)
+        return RedirectResponse(
+            f"/admin_web/broadcasts?sent={sent}&failed={failed}",
+            status_code=302,
+        )
 
     # ---------- health ----------
     @app.api_route("/health", methods=["GET", "HEAD"])
