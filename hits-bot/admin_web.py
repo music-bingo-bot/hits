@@ -22,7 +22,7 @@ from db import (
     get_track_by_id,
     create_track,
     update_track,
-    delete_track,  # алиасы совместимости
+    delete_track,          # алиасы совместимости
     update_track_file,
     create_admin_token,
     consume_admin_token,
@@ -35,19 +35,20 @@ from db import (
     get_all_user_ids,
 )
 
-TEMPLATES = Jinja2Templates(directory="templates")
+# ВАЖНО: у тебя шаблоны лежат в папке templates/templates,
+# поэтому указываем именно её.
+TEMPLATES = Jinja2Templates(directory="templates/templates")
 
 
 # ---- утилита: зачистка ID3 у mp3 ----
 def _strip_id3_safe(path: str) -> None:
     """
-    Удаляем ID3-теги, чтобы Telegram не подставлял 'Исполнитель – Название' из метаданных.
-    Если библиотека/файл недоступны — тихо пропускаем.
+    Удаляем ID3-теги, чтобы Telegram не подставлял 'Исполнитель – Название'
+    из метаданных. Если библиотека/файл недоступны — тихо пропускаем.
     """
     try:
         from mutagen import File
         from mutagen.id3 import ID3, ID3NoHeaderError
-
         if not os.path.exists(path):
             return
         try:
@@ -66,7 +67,8 @@ def _strip_id3_safe(path: str) -> None:
 def create_app(bot):
     app = FastAPI()
     app.add_middleware(
-        SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "secret")
+        SessionMiddleware,
+        secret_key=os.getenv("SESSION_SECRET", "secret"),
     )
 
     # раздача /uploads (аудио/картинки/БД) как статики
@@ -122,7 +124,8 @@ def create_app(bot):
             return guard
         items = await get_all_tracks()
         return TEMPLATES.TemplateResponse(
-            "tracks.html", {"request": request, "items": items}
+            "tracks.html",
+            {"request": request, "items": items},
         )
 
     @app.post("/admin_web/upload")
@@ -162,9 +165,7 @@ def create_app(bot):
                     await f.write(chunk)
 
         # сохраняем (title, HINT, AUDIO)
-        await create_track(
-            title or f"Хит #{seq:02d}", hint_path or "", audio_path or ""
-        )
+        await create_track(title or f"Хит #{seq:02d}", hint_path or "", audio_path or "")
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.get("/admin_web/edit/{track_id}", response_class=HTMLResponse)
@@ -174,7 +175,8 @@ def create_app(bot):
             return guard
         row = await get_track_by_id(track_id)
         return TEMPLATES.TemplateResponse(
-            "edit_track.html", {"request": request, "row": row}
+            "edit_track.html",
+            {"request": request, "row": row},
         )
 
     @app.post("/admin_web/edit/{track_id}")
@@ -194,9 +196,7 @@ def create_app(bot):
         if hint and hint.filename:
             os.makedirs("uploads/hints", exist_ok=True)
             ext = os.path.splitext(hint.filename)[1] or ".jpg"
-            hint_path = os.path.join(
-                "uploads", "hints", f"hint_{track_id:02d}{ext}"
-            )
+            hint_path = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
             async with aiofiles.open(hint_path, "wb") as f:
                 while chunk := await hint.read(64 * 1024):
                     await f.write(chunk)
@@ -206,7 +206,9 @@ def create_app(bot):
         if audio and audio.filename:
             os.makedirs("uploads/audio", exist_ok=True)
             audio_path = os.path.join(
-                "uploads", "audio", f"Музыкальное бинго — {track_id:02d}.mp3"
+                "uploads",
+                "audio",
+                f"Музыкальное бинго — {track_id:02d}.mp3",
             )
             async with aiofiles.open(audio_path, "wb") as f:
                 while chunk := await audio.read(64 * 1024):
@@ -247,16 +249,13 @@ def create_app(bot):
         os.makedirs(base, exist_ok=True)
 
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            # если папки ещё пустые — zip всё равно создастся
             if os.path.isdir(base):
                 for root, _dirs, files in os.walk(base):
                     for name in files:
                         full = os.path.join(root, name)
-                        # arcname — относительный путь внутри архива
                         arc = os.path.relpath(full, start=os.path.dirname(base))
                         zf.write(full, arcname=arc)
 
-        # отдадим файл
         return FileResponse(
             zip_path,
             media_type="application/zip",
@@ -272,7 +271,6 @@ def create_app(bot):
         if not archive or not archive.filename:
             return RedirectResponse("/admin_web?restore=missing", status_code=302)
 
-        # сохраняем загруженный zip на диск
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
         async with aiofiles.open(tmp.name, "wb") as f:
             while chunk := await archive.read(64 * 1024):
@@ -281,9 +279,7 @@ def create_app(bot):
         base = "uploads"
         os.makedirs(base, exist_ok=True)
 
-        # распаковываем поверх (перезаписывает файлы)
         with zipfile.ZipFile(tmp.name, "r") as zf:
-            # безопасность по-минимуму: оставляем только пути внутри uploads/
             for member in zf.infolist():
                 target = os.path.normpath(os.path.join(".", member.filename))
                 if not target.startswith(("uploads", "./uploads")):
@@ -305,7 +301,8 @@ def create_app(bot):
             return guard
         items = await broadcasts_all()
         return TEMPLATES.TemplateResponse(
-            "broadcasts_list.html", {"request": request, "items": items}
+            "broadcasts_list.html",
+            {"request": request, "items": items},
         )
 
     @app.get("/admin_web/broadcasts/new", response_class=HTMLResponse)
@@ -314,7 +311,8 @@ def create_app(bot):
         if guard:
             return guard
         return TEMPLATES.TemplateResponse(
-            "broadcasts_new.html", {"request": request}
+            "broadcasts_new.html",
+            {"request": request},
         )
 
     @app.post("/admin_web/broadcasts/preview", response_class=HTMLResponse)
@@ -333,9 +331,9 @@ def create_app(bot):
         bid = await broadcast_create(title, text)
         os.makedirs("uploads/broadcasts", exist_ok=True)
 
-        async def _save_many(lst, kind: str):
+        async def _save_many(lst, kind):
             for up in lst or []:
-                if not up or not up.filename:
+                if not up.filename:
                     continue
                 path = os.path.join("uploads", "broadcasts", up.filename)
                 async with aiofiles.open(path, "wb") as f:
@@ -352,6 +350,9 @@ def create_app(bot):
         vids = [p for k, p in media if k == "video"]
         fils = [p for k, p in media if k == "file"]
 
+        # текст с переносами для предпросмотра
+        text_html = (text or "").replace("\n", "<br>")
+
         return TEMPLATES.TemplateResponse(
             "broadcasts_preview.html",
             {
@@ -359,6 +360,7 @@ def create_app(bot):
                 "id": bid,
                 "title": title,
                 "text": text,
+                "text_html": text_html,
                 "images": imgs,
                 "videos": vids,
                 "files": fils,
@@ -390,12 +392,7 @@ def create_app(bot):
         sent = 0
         failed = 0
 
-        from aiogram.types import (
-            FSInputFile,
-            InputMediaPhoto,
-            InputMediaVideo,
-            InputMediaDocument,
-        )
+        from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, InputMediaDocument
 
         album = []
         for kind, path in media[:10]:
