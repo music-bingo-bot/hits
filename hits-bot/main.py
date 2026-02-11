@@ -28,6 +28,14 @@ from db import (
 import messages as MSG
 from admin_web import create_app
 
+from r2_storage import (
+    r2_enabled,
+    normalize_r2_audio_ref,
+    normalize_r2_hint_ref,
+    presign_get_url,
+    get_bytes_from_r2,
+    overwrite_bytes_in_r2,
+)
 
 # ---------- ENV ----------
 load_dotenv()
@@ -126,6 +134,67 @@ def _public_host() -> str:
     return "https://example.com"
 
 
+# --- ID3 strip (аудио) ---
+def _strip_id3_bytes_mp3(data: bytes) -> bytes:
+    """
+    Снимаем ID3v2 (в начале) и ID3v1 (в конце).
+    Это важно, чтобы Telegram не подставлял названия из метаданных.
+    """
+    b = data or b""
+    if not b:
+        return b
+
+    # ID3v2 header: "ID3" + ver(2) + flags(1) + size(4 synchsafe)
+    if len(b) >= 10 and b[:3] == b"ID3":
+        size_bytes = b[6:10]
+        tag_size = (
+            (size_bytes[0] & 0x7F) << 21 |
+            (size_bytes[1] & 0x7F) << 14 |
+            (size_bytes[2] & 0x7F) << 7  |
+            (size_bytes[3] & 0x7F)
+        )
+        cut = 10 + tag_size
+        if cut <= len(b):
+            b = b[cut:]
+
+    # ID3v1 footer: last 128 bytes start with "TAG"
+    if len(b) >= 128 and b[-128:-125] == b"TAG":
+        b = b[:-128]
+
+    return b
+
+
+SANITIZED_R2_KEYS: set[str] = set()
+
+
+async def _r2_audio_url_ensure_sanitized(r2_key: str, download_filename: str) -> str:
+    """
+    1) Если ещё не чистили этот ключ — скачиваем из R2, снимаем ID3, overwrite (если изменилось)
+    2) Возвращаем presigned URL
+    """
+    if r2_key and r2_key not in SANITIZED_R2_KEYS and r2_enabled():
+        try:
+            raw, _meta = get_bytes_from_r2(r2_key)
+            clean = _strip_id3_bytes_mp3(raw)
+            if clean != raw:
+                overwrite_bytes_in_r2(clean, r2_key, content_type="audio/mpeg")
+            SANITIZED_R2_KEYS.add(r2_key)
+        except Exception as e:
+            logger.warning(f"sanitize R2 mp3 failed key={r2_key}: {e}")
+
+    return presign_get_url(
+        r2_key,
+        expires_seconds=3600,
+        download_filename=download_filename,
+        content_type="audio/mpeg",
+    )
+
+
+def _r2_image_url(r2_key: str) -> str:
+    # content_type можно не форсить, пусть CF отдаёт как есть
+    return presign_get_url(r2_key, expires_seconds=3600)
+
+
 # ---------- handlers ----------
 @dp.message(CommandStart())
 async def start_cmd(m: Message):
@@ -202,22 +271,38 @@ async def send_current_track(chat_id: int):
     seq_title = f"Музыкальное бинго — {state.idx + 1:0{width}d}.mp3"
 
     try:
+        # --- R2 audio (preferred) ---
+        r2_key = normalize_r2_audio_ref(file_field or "")
+        if r2_key and r2_enabled():
+            audio_url = await _r2_audio_url_ensure_sanitized(r2_key, download_filename=seq_title)
+            await bot.send_audio(
+                chat_id,
+                audio=audio_url,
+                caption=caption,
+                title=seq_title,
+                performer="",  # как было: пусто
+                reply_markup=kb_track_full()
+            )
+            return
+
+        # --- legacy local ---
         if file_field and file_field.startswith("uploads/") and os.path.exists(file_field):
             await bot.send_audio(
                 chat_id,
                 audio=FSInputFile(file_field),
                 caption=caption,
                 title=seq_title,
-                performer="",                # ПРИНУДИТЕЛЬНО ПУСТОЙ исполнитель — чтобы не тянулся из ID3
+                performer="",
                 reply_markup=kb_track_full()
             )
         else:
+            # telegram file_id / url
             await bot.send_audio(
                 chat_id,
                 audio=file_field,
                 caption=caption,
                 title=seq_title,
-                performer="",                # то же для file_id/URL
+                performer="",
                 reply_markup=kb_track_full()
             )
     except TelegramBadRequest:
@@ -235,6 +320,17 @@ async def cb_hint(c: CallbackQuery):
 
     _id, _title, hint_image, _file = row
     if hint_image:
+        # --- R2 hint (stored as "r2/<key>") ---
+        r2_key = normalize_r2_hint_ref(hint_image or "")
+        if r2_key and r2_enabled():
+            try:
+                url = _r2_image_url(r2_key)
+                await c.message.answer_photo(url, reply_markup=kb_after_hint())
+                await c.answer()
+                return
+            except Exception as e:
+                logger.warning(f"send hint from R2 failed key={r2_key}: {e}")
+
         if hint_image.startswith("uploads/") and os.path.exists(hint_image):
             await c.message.answer_photo(FSInputFile(hint_image), reply_markup=kb_after_hint())
         else:
