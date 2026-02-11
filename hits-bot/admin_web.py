@@ -35,6 +35,16 @@ from db import (
     get_all_user_ids,
 )
 
+from r2_storage import (
+    r2_enabled,
+    build_r2_key,
+    put_bytes_to_r2,
+    overwrite_bytes_in_r2,
+    presign_get_url,
+    normalize_r2_audio_ref,
+    normalize_r2_hint_ref,
+)
+
 TEMPLATES = Jinja2Templates(directory="templates")
 
 
@@ -73,9 +83,24 @@ def create_app(bot):
         secret_key=os.getenv("SESSION_SECRET", "secret"),
     )
 
-    # раздача /uploads (аудио/картинки/БД) как статики
+    # раздача /uploads (аудио/картинки/БД) как статики (legacy + DB)
     os.makedirs("uploads", exist_ok=True)
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+    # ---------- R2 proxy (для админки/браузера: <img src="/r2/...">) ----------
+    @app.get("/r2/{key:path}")
+    async def r2_proxy(key: str):
+        # безопасность: не даём "вылезти" из пути
+        if not key or ".." in key or key.startswith("/"):
+            return PlainTextResponse("bad key", status_code=400)
+        if not r2_enabled():
+            return PlainTextResponse("r2 disabled", status_code=404)
+
+        try:
+            url = presign_get_url(key, expires_seconds=3600)
+            return RedirectResponse(url, status_code=302)
+        except Exception:
+            return PlainTextResponse("not found", status_code=404)
 
     # ---------- auth ----------
     def _is_authed(request: Request) -> bool:
@@ -148,28 +173,64 @@ def create_app(bot):
         items = await get_all_tracks()
         seq = len(items) + 1
 
-        # имя MP3 — с длинным тире
+        # имя MP3 — с длинным тире (как было)
         seq_name = f"Музыкальное бинго — {seq:02d}.mp3"
 
-        audio_path = None
+        audio_field = ""
         if audio and audio.filename:
-            os.makedirs("uploads/audio", exist_ok=True)
-            audio_path = os.path.join("uploads", "audio", seq_name)
-            async with aiofiles.open(audio_path, "wb") as f:
-                while chunk := await audio.read(64 * 1024):
-                    await f.write(chunk)
-            _strip_id3_safe(audio_path)
+            if r2_enabled():
+                # читаем в память через temp-file (чтобы mutagen зачистил)
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                tmp_path = tmp.name
+                tmp.close()
 
-        hint_path = None
+                try:
+                    async with aiofiles.open(tmp_path, "wb") as f:
+                        while chunk := await audio.read(64 * 1024):
+                            await f.write(chunk)
+                    _strip_id3_safe(tmp_path)
+
+                    async with aiofiles.open(tmp_path, "rb") as f:
+                        content = await f.read()
+
+                    key = build_r2_key("audio", f"track_{seq:02d}.mp3")
+                    put_bytes_to_r2(content, key, content_type="audio/mpeg")
+                    audio_field = f"r2:{key}"
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+            else:
+                # legacy local
+                os.makedirs("uploads/audio", exist_ok=True)
+                audio_path = os.path.join("uploads", "audio", seq_name)
+                async with aiofiles.open(audio_path, "wb") as f:
+                    while chunk := await audio.read(64 * 1024):
+                        await f.write(chunk)
+                _strip_id3_safe(audio_path)
+                audio_field = audio_path
+
+        hint_field = ""
         if hint and hint.filename:
-            os.makedirs("uploads/hints", exist_ok=True)
-            ext = os.path.splitext(hint.filename)[1] or ".jpg"
-            hint_path = os.path.join("uploads", "hints", f"hint_{seq:02d}{ext}")
-            async with aiofiles.open(hint_path, "wb") as f:
-                while chunk := await hint.read(64 * 1024):
-                    await f.write(chunk)
+            if r2_enabled():
+                ext = os.path.splitext(hint.filename)[1] or ".jpg"
+                data = await hint.read()
+                key = build_r2_key("hints", f"hint_{seq:02d}{ext}")
+                put_bytes_to_r2(data, key, content_type=getattr(hint, "content_type", None) or None)
 
-        await create_track(title or f"Хит #{seq:02d}", hint_path or "", audio_path or "")
+                # ВАЖНО: именно так, чтобы шаблон <img src="/{{ hint_field }}"> работал
+                hint_field = f"r2/{key}"
+            else:
+                os.makedirs("uploads/hints", exist_ok=True)
+                ext = os.path.splitext(hint.filename)[1] or ".jpg"
+                hint_path = os.path.join("uploads", "hints", f"hint_{seq:02d}{ext}")
+                async with aiofiles.open(hint_path, "wb") as f:
+                    fchunk = await hint.read()
+                    await f.write(fchunk)
+                hint_field = hint_path
+
+        await create_track(title or f"Хит #{seq:02d}", hint_field or "", audio_field or "")
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.get("/admin_web/edit/{track_id}", response_class=HTMLResponse)
@@ -195,37 +256,78 @@ def create_app(bot):
         if guard:
             return guard
 
+        old = await get_track_by_id(track_id)
+        old_title = old[1] if old else ""
+        old_hint = old[2] if old else ""
+        old_audio = old[3] if old else ""
+
         # заменить картинку-подсказку
-        hint_path = None
+        hint_field = None
         if hint and hint.filename:
-            os.makedirs("uploads/hints", exist_ok=True)
-            ext = os.path.splitext(hint.filename)[1] or ".jpg"
-            hint_path = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
-            async with aiofiles.open(hint_path, "wb") as f:
-                while chunk := await hint.read(64 * 1024):
-                    await f.write(chunk)
+            if r2_enabled():
+                ext = os.path.splitext(hint.filename)[1] or ".jpg"
+                data = await hint.read()
+
+                existing_key = normalize_r2_hint_ref(old_hint or "")
+                key = existing_key or build_r2_key("hints", f"hint_{track_id:02d}{ext}")
+                overwrite_bytes_in_r2(data, key, content_type=getattr(hint, "content_type", None) or None)
+
+                hint_field = f"r2/{key}"
+            else:
+                os.makedirs("uploads/hints", exist_ok=True)
+                ext = os.path.splitext(hint.filename)[1] or ".jpg"
+                hint_path = os.path.join("uploads", "hints", f"hint_{track_id:02d}{ext}")
+                async with aiofiles.open(hint_path, "wb") as f:
+                    while chunk := await hint.read(64 * 1024):
+                        await f.write(chunk)
+                hint_field = hint_path
 
         # заменить аудио
-        audio_path = None
+        audio_field = None
         if audio and audio.filename:
-            os.makedirs("uploads/audio", exist_ok=True)
-            audio_path = os.path.join(
-                "uploads",
-                "audio",
-                f"Музыкальное бинго — {track_id:02d}.mp3",
-            )
-            async with aiofiles.open(audio_path, "wb") as f:
-                while chunk := await audio.read(64 * 1024):
-                    await f.write(chunk)
-            _strip_id3_safe(audio_path)
+            if r2_enabled():
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                tmp_path = tmp.name
+                tmp.close()
+
+                try:
+                    async with aiofiles.open(tmp_path, "wb") as f:
+                        while chunk := await audio.read(64 * 1024):
+                            await f.write(chunk)
+                    _strip_id3_safe(tmp_path)
+
+                    async with aiofiles.open(tmp_path, "rb") as f:
+                        content = await f.read()
+
+                    existing_key = normalize_r2_audio_ref(old_audio or "")
+                    key = existing_key or build_r2_key("audio", f"track_{track_id:02d}.mp3")
+                    overwrite_bytes_in_r2(content, key, content_type="audio/mpeg")
+
+                    audio_field = f"r2:{key}"
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+            else:
+                os.makedirs("uploads/audio", exist_ok=True)
+                audio_path = os.path.join(
+                    "uploads",
+                    "audio",
+                    f"Музыкальное бинго — {track_id:02d}.mp3",
+                )
+                async with aiofiles.open(audio_path, "wb") as f:
+                    while chunk := await audio.read(64 * 1024):
+                        await f.write(chunk)
+                _strip_id3_safe(audio_path)
+                audio_field = audio_path
 
         # обновляем БД
-        if title or hint_path is not None:
-            old = await get_track_by_id(track_id)
-            new_hint = hint_path if hint_path is not None else (old[2] if old else "")
-            await update_track(track_id, title or (old[1] if old else ""), new_hint)
-        if audio_path is not None:
-            await update_track_file(track_id, audio_path)
+        if title or hint_field is not None:
+            new_hint = hint_field if hint_field is not None else (old_hint or "")
+            await update_track(track_id, title or (old_title or ""), new_hint)
+        if audio_field is not None:
+            await update_track_file(track_id, audio_field)
 
         return RedirectResponse("/admin_web", status_code=302)
 
