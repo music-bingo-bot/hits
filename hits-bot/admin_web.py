@@ -24,6 +24,7 @@ from db import (
     update_track,
     delete_track,  # алиас
     update_track_file,
+    update_track_links,
     create_admin_token,
     consume_admin_token,
     broadcasts_all,
@@ -158,10 +159,26 @@ def create_app(bot):
             {"request": request, "items": items},
         )
 
+    @app.post("/admin_web/links/{track_id}")
+    async def update_links_post(
+        request: Request,
+        track_id: int,
+        yandex_url: str = Form(""),
+        apple_url: str = Form(""),
+    ):
+        guard = _need_auth(request)
+        if guard:
+            return guard
+
+        await update_track_links(track_id, (yandex_url or "").strip(), (apple_url or "").strip())
+        return RedirectResponse("/admin_web", status_code=302)
+
     @app.post("/admin_web/upload")
     async def upload_track(
         request: Request,
         title: str = Form(""),
+        yandex_url: str = Form(""),
+        apple_url: str = Form(""),
         audio: Optional[UploadFile] = None,
         hint: Optional[UploadFile] = None,
     ):
@@ -230,7 +247,13 @@ def create_app(bot):
                     await f.write(fchunk)
                 hint_field = hint_path
 
-        await create_track(title or f"Хит #{seq:02d}", hint_field or "", audio_field or "")
+        await create_track(
+            title or f"Хит #{seq:02d}",
+            hint_field or "",
+            audio_field or "",
+            (yandex_url or "").strip(),
+            (apple_url or "").strip(),
+        )
         return RedirectResponse("/admin_web", status_code=302)
 
     @app.get("/admin_web/edit/{track_id}", response_class=HTMLResponse)
@@ -249,6 +272,8 @@ def create_app(bot):
         request: Request,
         track_id: int,
         title: str = Form(""),
+        yandex_url: str = Form(""),
+        apple_url: str = Form(""),
         audio: Optional[UploadFile] = None,
         hint: Optional[UploadFile] = None,
     ):
@@ -260,6 +285,8 @@ def create_app(bot):
         old_title = old[1] if old else ""
         old_hint = old[2] if old else ""
         old_audio = old[3] if old else ""
+        old_yandex = old[4] if old else ""
+        old_apple = old[5] if old else ""
 
         # заменить картинку-подсказку
         hint_field = None
@@ -321,6 +348,11 @@ def create_app(bot):
                         await f.write(chunk)
                 _strip_id3_safe(audio_path)
                 audio_field = audio_path
+
+        # ссылки
+        new_yandex = (yandex_url if yandex_url is not None else old_yandex) or ""
+        new_apple  = (apple_url  if apple_url  is not None else old_apple) or ""
+        await update_track_links(track_id, new_yandex.strip(), new_apple.strip())
 
         # обновляем БД
         if title or hint_field is not None:
