@@ -48,6 +48,18 @@
       <input type="text" name="title" value="{{ row[1] }}">
     </label>
   </p>
+
+  <p>
+    <label>🎵 Ссылка на Яндекс Музыку (необязательно)<br>
+      <input type="text" name="yandex_url" value="{{ row[4] }}">
+    </label>
+  </p>
+  <p>
+    <label>🎵 Ссылка на Apple Music (необязательно)<br>
+      <input type="text" name="apple_url" value="{{ row[5] }}">
+    </label>
+  </p>
+
   <p>
     Текущая подсказка:<br>
     {% if row[2] %}
