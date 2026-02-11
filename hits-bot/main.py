@@ -23,7 +23,8 @@ import uvicorn
 
 from db import (
     init_db, get_all_tracks, get_track_by_id,
-    create_admin_token, get_setting, save_user
+    create_admin_token, get_setting, save_user,
+    is_r2_key_sanitized, mark_r2_key_sanitized,
 )
 import messages as MSG
 from admin_web import create_app
@@ -164,21 +165,25 @@ def _strip_id3_bytes_mp3(data: bytes) -> bytes:
     return b
 
 
-SANITIZED_R2_KEYS: set[str] = set()
-
-
 async def _r2_audio_url_ensure_sanitized(r2_key: str, download_filename: str) -> str:
     """
-    1) Если ещё не чистили этот ключ — скачиваем из R2, снимаем ID3, overwrite (если изменилось)
+    1) Если ключ ещё не отмечен как sanitized в DB — скачиваем из R2, снимаем ID3,
+       overwrite (если изменилось), отмечаем sanitized в DB.
+       (DB-флаг переживает рестарты/масштабирование и убирает лаги от повторных sanitize)
     2) Возвращаем presigned URL
     """
-    if r2_key and r2_key not in SANITIZED_R2_KEYS and r2_enabled():
+    if r2_key and r2_enabled():
         try:
-            raw, _meta = get_bytes_from_r2(r2_key)
-            clean = _strip_id3_bytes_mp3(raw)
-            if clean != raw:
-                overwrite_bytes_in_r2(clean, r2_key, content_type="audio/mpeg")
-            SANITIZED_R2_KEYS.add(r2_key)
+            already = await is_r2_key_sanitized(r2_key)
+            if not already:
+                # boto3 синхронный — выносим в thread, чтобы не блокировать event loop
+                raw, _meta = await asyncio.to_thread(get_bytes_from_r2, r2_key)
+                clean = _strip_id3_bytes_mp3(raw)
+
+                if clean != raw:
+                    await asyncio.to_thread(overwrite_bytes_in_r2, clean, r2_key, "audio/mpeg")
+
+                await mark_r2_key_sanitized(r2_key)
         except Exception as e:
             logger.warning(f"sanitize R2 mp3 failed key={r2_key}: {e}")
 
