@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     film_title TEXT NOT NULL,
     hint TEXT NOT NULL,            -- путь к картинке-подсказке
-    file_id TEXT NOT NULL          -- file_id TG или путь к mp3 (uploads/audio/..)
+    file_id TEXT NOT NULL,         -- file_id TG или путь к mp3 (uploads/audio/..)
+    yandex_url TEXT NOT NULL DEFAULT '',
+    apple_url  TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -75,19 +77,32 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("PRAGMA foreign_keys = ON;")
+
+        # базовые таблицы/индексы
         for stmt in CREATE_SQL.split(";"):
             if stmt.strip():
                 await db.execute(stmt)
+
+        # ---- миграции для существующих БД ----
+        # tracks: yandex_url / apple_url
+        cur = await db.execute("PRAGMA table_info(tracks)")
+        cols = {row[1] for row in await cur.fetchall()}  # row[1] = name
+
+        if "yandex_url" not in cols:
+            await db.execute("ALTER TABLE tracks ADD COLUMN yandex_url TEXT NOT NULL DEFAULT ''")
+        if "apple_url" not in cols:
+            await db.execute("ALTER TABLE tracks ADD COLUMN apple_url TEXT NOT NULL DEFAULT ''")
+
         await db.commit()
 
 # ---------- Tracks ----------
-async def add_track(film_title: str, hint: str, file_id: str) -> int:
-    """Добавление трека (title, hint_image_path, audio_file_id_or_path)."""
+async def add_track(film_title: str, hint: str, file_id: str, yandex_url: str = "", apple_url: str = "") -> int:
+    """Добавление трека (title, hint_image_path, audio_file_id_or_path, yandex_url, apple_url)."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
         cur = await db.execute(
-            "INSERT INTO tracks (film_title, hint, file_id) VALUES (?, ?, ?)",
-            (film_title, hint, file_id)
+            "INSERT INTO tracks (film_title, hint, file_id, yandex_url, apple_url) VALUES (?, ?, ?, ?, ?)",
+            (film_title, hint, file_id, yandex_url or "", apple_url or "")
         )
         await db.commit()
         return cur.lastrowid
@@ -104,14 +119,16 @@ async def list_tracks(limit: int = 1000, offset: int = 0):
 async def get_all_tracks():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
-        cur = await db.execute("SELECT id, film_title, hint, file_id FROM tracks ORDER BY id")
+        cur = await db.execute(
+            "SELECT id, film_title, hint, file_id, yandex_url, apple_url FROM tracks ORDER BY id"
+        )
         return await cur.fetchall()
 
 async def get_track_by_id(track_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
         cur = await db.execute(
-            "SELECT id, film_title, hint, file_id FROM tracks WHERE id=?",
+            "SELECT id, film_title, hint, file_id, yandex_url, apple_url FROM tracks WHERE id=?",
             (track_id,)
         )
         return await cur.fetchone()
@@ -140,6 +157,16 @@ async def update_track_file(track_id: int, file_id: str):
         await db.execute(
             "UPDATE tracks SET file_id=? WHERE id=?",
             (file_id, track_id)
+        )
+        await db.commit()
+
+async def update_track_links(track_id: int, yandex_url: str, apple_url: str):
+    """Обновить ссылки на стриминги."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute(
+            "UPDATE tracks SET yandex_url=?, apple_url=? WHERE id=?",
+            (yandex_url or "", apple_url or "", track_id)
         )
         await db.commit()
 
