@@ -38,6 +38,10 @@
 <h2>Добавить трек</h2>
 <form action="/admin_web/upload" method="post" enctype="multipart/form-data">
   <p><label>Название хита<br><input type="text" name="title" placeholder="Напр. Michael Jackson — Billie Jean"></label></p>
+
+  <p><label>🎵 Ссылка на Яндекс Музыку (необязательно)<br><input type="text" name="yandex_url" placeholder="https://music.yandex.ru/..."></label></p>
+  <p><label>🎵 Ссылка на Apple Music (необязательно)<br><input type="text" name="apple_url" placeholder="https://music.apple.com/..."></label></p>
+
   <p><label>MP3 (будет сохранён как «Музыкальное бинго — 01.mp3» и т.д.)<br><input type="file" name="audio" accept="audio/*" required></label></p>
   <p><label>Картинка-подсказка<br><input type="file" name="hint" accept="image/*"></label></p>
   <p><button>Загрузить</button></p>
@@ -46,10 +50,17 @@
 <h2>Список</h2>
 <table>
   <tr><th>ID</th><th>Название</th><th>Подсказка</th><th>Файл</th><th>Действия</th></tr>
-  {% for id, title, hint_image, file_field in items %}
+  {% for id, title, hint_image, file_field, yandex_url, apple_url in items %}
   <tr>
     <td>{{ id }}</td>
-    <td>{{ title }}</td>
+    <td>
+      {{ title }}
+      <form method="post" action="/admin_web/links/{{ id }}" style="margin-top:10px;">
+        <p style="margin:6px 0;"><label>🎵 Яндекс Музыка<br><input type="text" name="yandex_url" value="{{ yandex_url }}"></label></p>
+        <p style="margin:6px 0;"><label>🎵 Apple Music<br><input type="text" name="apple_url" value="{{ apple_url }}"></label></p>
+        <p style="margin:6px 0;"><button>Сохранить ссылки</button></p>
+      </form>
+    </td>
     <td>{% if hint_image %}<img class="hint" src="/{{ hint_image }}">{% else %}—{% endif %}</td>
     <td>{{ file_field }}</td>
     <td>
