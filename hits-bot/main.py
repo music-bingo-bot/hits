@@ -103,7 +103,6 @@ def kb_main():
 def _pick_listen_button(yandex_url: str, apple_url: str) -> Tuple[Optional[str], Optional[str]]:
     y = (yandex_url or "").strip()
     a = (apple_url or "").strip()
-    # В боте показываем одну кнопку: либо Яндекс, либо Apple
     if y:
         return ("🎵 Послушать в Яндекс Музыке", y)
     if a:
@@ -120,13 +119,13 @@ def kb_track_full(listen_text: Optional[str] = None, listen_url: Optional[str] =
     if listen_text and listen_url:
         kb.button(text=listen_text, url=listen_url)
 
-    kb.button(text="❌ Начать сначала", callback_data="game:restart")
+    # ❌ Рестарт убран (закомментирован)
+    # kb.button(text="❌ Начать сначала", callback_data="game:restart")
 
-    # rows: 2,1,(1),1
     if listen_text and listen_url:
-        kb.adjust(2, 1, 1, 1)
-    else:
         kb.adjust(2, 1, 1)
+    else:
+        kb.adjust(2, 1)
     return kb.as_markup()
 
 def kb_after_hint(listen_text: Optional[str] = None, listen_url: Optional[str] = None):
@@ -137,10 +136,11 @@ def kb_after_hint(listen_text: Optional[str] = None, listen_url: Optional[str] =
     if listen_text and listen_url:
         kb.button(text=listen_text, url=listen_url)
 
-    kb.button(text="❌ Начать сначала", callback_data="game:restart")
+    # ❌ Рестарт убран
+    # kb.button(text="❌ Начать сначала", callback_data="game:restart")
 
     if listen_text and listen_url:
-        kb.adjust(2, 1, 1)
+        kb.adjust(2, 1)
     else:
         kb.adjust(2, 1)
     return kb.as_markup()
@@ -152,12 +152,13 @@ def kb_after_answer(listen_text: Optional[str] = None, listen_url: Optional[str]
     if listen_text and listen_url:
         kb.button(text=listen_text, url=listen_url)
 
-    kb.button(text="❌ Начать сначала", callback_data="game:restart")
+    # ❌ Рестарт убран
+    # kb.button(text="❌ Начать сначала", callback_data="game:restart")
 
     if listen_text and listen_url:
-        kb.adjust(1, 1, 1)
-    else:
         kb.adjust(1, 1)
+    else:
+        kb.adjust(1)
     return kb.as_markup()
 
 def kb_restart():
