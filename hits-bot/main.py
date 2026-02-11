@@ -6,7 +6,7 @@ import traceback
 import logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
@@ -100,29 +100,69 @@ def kb_main():
     kb.adjust(2)
     return kb.as_markup()
 
-def kb_track_full():
+def _pick_listen_button(yandex_url: str, apple_url: str) -> Tuple[Optional[str], Optional[str]]:
+    y = (yandex_url or "").strip()
+    a = (apple_url or "").strip()
+    # В боте показываем одну кнопку: либо Яндекс, либо Apple
+    if y:
+        return ("🎵 Послушать в Яндекс Музыке", y)
+    if a:
+        return ("🎵 Послушать в Apple Music", a)
+    return (None, None)
+
+def kb_track_full(listen_text: Optional[str] = None, listen_url: Optional[str] = None):
     kb = InlineKeyboardBuilder()
+
     kb.button(text=MSG.get("BUTTON_HINT"),   callback_data="game:hint")
     kb.button(text=MSG.get("BUTTON_ANSWER"), callback_data="game:answer")
     kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
-    kb.adjust(2, 1)
+
+    if listen_text and listen_url:
+        kb.button(text=listen_text, url=listen_url)
+
+    kb.button(text="❌ Начать сначала", callback_data="game:restart")
+
+    # rows: 2,1,(1),1
+    if listen_text and listen_url:
+        kb.adjust(2, 1, 1, 1)
+    else:
+        kb.adjust(2, 1, 1)
     return kb.as_markup()
 
-def kb_after_hint():
+def kb_after_hint(listen_text: Optional[str] = None, listen_url: Optional[str] = None):
     kb = InlineKeyboardBuilder()
     kb.button(text=MSG.get("BUTTON_ANSWER"), callback_data="game:answer")
     kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
-    kb.adjust(2)
+
+    if listen_text and listen_url:
+        kb.button(text=listen_text, url=listen_url)
+
+    kb.button(text="❌ Начать сначала", callback_data="game:restart")
+
+    if listen_text and listen_url:
+        kb.adjust(2, 1, 1)
+    else:
+        kb.adjust(2, 1)
     return kb.as_markup()
 
-def kb_after_answer():
+def kb_after_answer(listen_text: Optional[str] = None, listen_url: Optional[str] = None):
     kb = InlineKeyboardBuilder()
-    kb.button(text=MSG.get("BUTTON_NEXT"),   callback_data="game:next")
+    kb.button(text=MSG.get("BUTTON_NEXT"), callback_data="game:next")
+
+    if listen_text and listen_url:
+        kb.button(text=listen_text, url=listen_url)
+
+    kb.button(text="❌ Начать сначала", callback_data="game:restart")
+
+    if listen_text and listen_url:
+        kb.adjust(1, 1, 1)
+    else:
+        kb.adjust(1, 1)
     return kb.as_markup()
 
 def kb_restart():
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔁 Сыграть ещё раз", callback_data="game:restart")
+    kb.button(text="❌ Начать сначала", callback_data="game:restart")
     return kb.as_markup()
 
 
@@ -268,7 +308,9 @@ async def send_current_track(chat_id: int):
         await bot.send_message(chat_id, "❌ Трек не найден.")
         return
 
-    _id, _title, _hint_img, file_field = row
+    _id, _title, _hint_img, file_field, yandex_url, apple_url = row
+    listen_text, listen_url = _pick_listen_button(yandex_url or "", apple_url or "")
+
     total = len(state.order_ids)
     caption = MSG.get("TRACK_X_OF_Y", i=state.idx + 1, total=total)
 
@@ -286,7 +328,7 @@ async def send_current_track(chat_id: int):
                 caption=caption,
                 title=seq_title,
                 performer="",  # как было: пусто
-                reply_markup=kb_track_full()
+                reply_markup=kb_track_full(listen_text, listen_url)
             )
             return
 
@@ -298,7 +340,7 @@ async def send_current_track(chat_id: int):
                 caption=caption,
                 title=seq_title,
                 performer="",
-                reply_markup=kb_track_full()
+                reply_markup=kb_track_full(listen_text, listen_url)
             )
         else:
             # telegram file_id / url
@@ -308,7 +350,7 @@ async def send_current_track(chat_id: int):
                 caption=caption,
                 title=seq_title,
                 performer="",
-                reply_markup=kb_track_full()
+                reply_markup=kb_track_full(listen_text, listen_url)
             )
     except TelegramBadRequest:
         await bot.send_message(chat_id, "Не удалось отправить аудио. Проверь файл/file_id.")
@@ -323,25 +365,27 @@ async def cb_hint(c: CallbackQuery):
     row = await get_track_by_id(state.order_ids[state.idx])
     if not row: return await c.answer()
 
-    _id, _title, hint_image, _file = row
+    _id, _title, hint_image, _file, yandex_url, apple_url = row
+    listen_text, listen_url = _pick_listen_button(yandex_url or "", apple_url or "")
+
     if hint_image:
         # --- R2 hint (stored as "r2/<key>") ---
         r2_key = normalize_r2_hint_ref(hint_image or "")
         if r2_key and r2_enabled():
             try:
                 url = _r2_image_url(r2_key)
-                await c.message.answer_photo(url, reply_markup=kb_after_hint())
+                await c.message.answer_photo(url, reply_markup=kb_after_hint(listen_text, listen_url))
                 await c.answer()
                 return
             except Exception as e:
                 logger.warning(f"send hint from R2 failed key={r2_key}: {e}")
 
         if hint_image.startswith("uploads/") and os.path.exists(hint_image):
-            await c.message.answer_photo(FSInputFile(hint_image), reply_markup=kb_after_hint())
+            await c.message.answer_photo(FSInputFile(hint_image), reply_markup=kb_after_hint(listen_text, listen_url))
         else:
-            await c.message.answer_photo(hint_image, reply_markup=kb_after_hint())
+            await c.message.answer_photo(hint_image, reply_markup=kb_after_hint(listen_text, listen_url))
     else:
-        await c.message.answer("Подсказка недоступна.")
+        await c.message.answer("Подсказка недоступна.", reply_markup=kb_after_hint(listen_text, listen_url))
     await c.answer()
 
 @dp.callback_query(F.data == "game:answer")
@@ -351,8 +395,13 @@ async def cb_answer(c: CallbackQuery):
     row = await get_track_by_id(state.order_ids[state.idx])
     if not row: return await c.answer()
 
-    _id, title, _hint, _file = row
-    await safe_send_text(c.message.answer, f"{MSG.get('ANSWER_PREFIX')} {title}", reply_markup=kb_after_answer())
+    _id, title, _hint, _file, yandex_url, apple_url = row
+    listen_text, listen_url = _pick_listen_button(yandex_url or "", apple_url or "")
+    await safe_send_text(
+        c.message.answer,
+        f"{MSG.get('ANSWER_PREFIX')} {title}",
+        reply_markup=kb_after_answer(listen_text, listen_url)
+    )
     await c.answer()
 
 @dp.callback_query(F.data == "game:next")
@@ -378,7 +427,7 @@ async def cb_restart(c: CallbackQuery):
     random.shuffle(order_ids)
     games[c.message.chat.id] = GameState(order_ids=order_ids, idx=0)
 
-    await safe_send_text(c.message.answer, "Погнали ещё! 🎵")
+    await safe_send_text(c.message.answer, "Ок, начинаем сначала! 🎵")
     await send_current_track(c.message.chat.id)
     await c.answer()
 
