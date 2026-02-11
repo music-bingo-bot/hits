@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS admin_tokens (
     expires_at INTEGER NOT NULL
 );
 
+-- Persisted cache of already-sanitized R2 audio keys (survives restarts/scaling)
+CREATE TABLE IF NOT EXISTS r2_sanitized (
+    key TEXT PRIMARY KEY,
+    sanitized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_broadcast_media_broadcast_id ON broadcast_media(broadcast_id);
 CREATE INDEX IF NOT EXISTS idx_broadcasts_created_at ON broadcasts(COALESCE(sent_at, created_at));
 CREATE INDEX IF NOT EXISTS idx_users_joined_at ON users(joined_at);
@@ -262,6 +268,25 @@ async def delete_broadcast(bid: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
         await db.execute("DELETE FROM broadcasts WHERE id=?", (bid,))
+        await db.commit()
+
+# ---------- R2 sanitized keys ----------
+async def is_r2_key_sanitized(key: str) -> bool:
+    if not key:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM r2_sanitized WHERE key=? LIMIT 1", (key,))
+        row = await cur.fetchone()
+        return bool(row)
+
+async def mark_r2_key_sanitized(key: str):
+    if not key:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO r2_sanitized(key) VALUES(?) ON CONFLICT(key) DO NOTHING",
+            (key,)
+        )
         await db.commit()
 
 # ---------- Совместимость со «старыми» именами ----------
